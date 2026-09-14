@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>DementiaCareAI Voice Test</title>
+
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        max-width: 700px;
+        margin: 60px auto;
+        padding: 20px;
+      }
+
+      textarea {
+        width: 100%;
+        min-height: 120px;
+        padding: 12px;
+        font-size: 18px;
+        box-sizing: border-box;
+      }
+
+      button {
+        margin-top: 15px;
+        padding: 12px 24px;
+        font-size: 18px;
+        cursor: pointer;
+      }
+
+      #status {
+        margin-top: 20px;
+        font-weight: bold;
+      }
+
+      #response {
+        margin-top: 15px;
+        padding: 15px;
+        background: #f2f2f2;
+        border-radius: 8px;
+        min-height: 30px;
+      }
+    </style>
+  </head>
+
+  <body>
+    <h1>DementiaCareAI</h1>
+
+    <p>Talk to your AI companion</p>
+
+    <textarea
+      id="message"
+      placeholder="Type your message here..."
+      autocomplete="off"
+      spellcheck="true"
+    ></textarea>
+
+    <br />
+
+    <button id="talkButton" type="button">🔊 Talk to DementiaCareAI</button>
+
+    <div id="status"></div>
+
+    <div id="response"></div>
+
+    <script>
+      const messageBox = document.getElementById("message");
+      const talkButton = document.getElementById("talkButton");
+      const statusBox = document.getElementById("status");
+      const responseBox = document.getElementById("response");
+
+      talkButton.addEventListener("click", async function () {
+        const message = messageBox.value.trim();
+
+        if (!message) {
+          statusBox.textContent = "Please type something first.";
+          messageBox.focus();
+          return;
+        }
+
+        talkButton.disabled = true;
+
+        statusBox.textContent = "DementiaCareAI is thinking...";
+        responseBox.textContent = "";
+
+        try {
+          const result = await fetch("http://127.0.0.1:5000/api/chat", {
+            method: "POST",
+
+            headers: {
+              "Content-Type": "application/json",
+            },
+
+            body: JSON.stringify({
+              message: message,
+              session_id: "voice-demo",
+            }),
+          });
+
+          const data = await result.json();
+
+          console.log("AI RESPONSE:", data);
+
+          if (!result.ok || !data.success) {
+            throw new Error(data.message || "The AI request failed.");
+          }
+
+          const aiMessage =
+            data.response || data.message || "I am here with you.";
+
+          responseBox.textContent = aiMessage;
+
+          statusBox.textContent = "DementiaCareAI is speaking...";
+
+          speak(aiMessage, data.language);
+        } catch (error) {
+          console.error(error);
+
+          statusBox.textContent = "Error: " + error.message;
+        } finally {
+          talkButton.disabled = false;
+        }
+      });
+
+      function speak(text, languageData) {
+        if (!window.speechSynthesis) {
+          statusBox.textContent =
+            "Your browser does not support speech synthesis.";
+
+          return;
+        }
+
+        window.speechSynthesis.cancel();
+
+        const utterance = new SpeechSynthesisUtterance(text);
+
+        /*
+         * Use backend language when available.
+         * Otherwise default to Indian English.
+         */
+
+        if (languageData && languageData.speech_locale) {
+          utterance.lang = languageData.speech_locale;
+        } else {
+          utterance.lang = "en-IN";
+        }
+
+        utterance.rate = 0.9;
+        utterance.pitch = 1.0;
+        utterance.volume = 1.0;
+
+        utterance.onend = function () {
+          statusBox.textContent = "DementiaCareAI finished speaking.";
+        };
+
+        utterance.onerror = function (event) {
+          console.error("Speech error:", event);
+
+          statusBox.textContent = "Speech error: " + event.error;
+        };
+
+        window.speechSynthesis.speak(utterance);
+      }
+    </script>
+  </body>
+</html>

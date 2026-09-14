@@ -1,0 +1,849 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+    <meta
+      name="description"
+      content="DementiaCare AI Companion — a calm, voice-first companion for daily care, memories and activities."
+    />
+
+    <title>DementiaCare — AI Companion</title>
+
+    <link rel="stylesheet" href="style.css" />
+  </head>
+
+  <body>
+    <!-- =====================================================
+         APP SHELL
+    ====================================================== -->
+
+    <div class="app-shell">
+      <!-- =================================================
+             HEADER
+        ================================================== -->
+
+      <header class="topbar">
+        <a class="brand" href="#home" aria-label="DementiaCare home">
+          <div class="brand-mark">
+            <span></span>
+            <span></span>
+          </div>
+
+          <div class="brand-copy">
+            <strong>DementiaCare</strong>
+            <small>AI Companion</small>
+          </div>
+        </a>
+
+        <div class="header-right">
+          <button class="header-control" id="languageButton" type="button">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="12" cy="12" r="9"></circle>
+              <path d="M3 12h18"></path>
+              <path d="M12 3c3 3 4.5 6 4.5 9S15 18 12 21"></path>
+              <path d="M12 3c-3 3-4.5 6-4.5 9S9 18 12 21"></path>
+            </svg>
+
+            <span id="languageLabel">English</span>
+          </button>
+
+          <button
+            class="header-control caregiver"
+            id="caregiverButton"
+            type="button"
+          >
+            Caregiver
+          </button>
+
+          <button
+            class="icon-control"
+            id="settingsButton"
+            type="button"
+            aria-label="Settings"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7Z"></path>
+              <path
+                d="m19.4 15 .1.1a2 2 0 0 1-2.8 2.8l-.1-.1a2 2 0 0 0-3.4 1.4V19a2 2 0 0 1-4 0v-.1a2 2 0 0 0-3.4-1.4l-.1.1A2 2 0 1 1 3 14.8l.1-.1A2 2 0 0 0 1.7 11.3H1.5a2 2 0 0 1 0-4h.2A2 2 0 0 0 3 3.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A2 2 0 0 0 9.2 0h.1a2 2 0 0 1 4 0h.1a2 2 0 0 0 3.4 1.1l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a2 2 0 0 0 1.4 3.4h.2a2 2 0 0 1 0 4H21a2 2 0 0 0-1.6 3.4Z"
+              ></path>
+            </svg>
+          </button>
+        </div>
+      </header>
+
+      <!-- =================================================
+             MAIN
+        ================================================== -->
+
+      <main id="home">
+        <!-- =============================================
+                 HERO / COMPANION
+            ============================================== -->
+
+        <section class="hero-section">
+          <div class="hero-copy">
+            <div class="time-greeting">
+              <span class="status-dot"></span>
+              <span id="greeting">Good morning</span>
+            </div>
+
+            <h1>
+              How can I help
+              <em>you today?</em>
+            </h1>
+
+            <p>
+              I'm here to talk with you, help with your routine, and spend some
+              time together.
+            </p>
+
+            <div class="hero-actions">
+              <button class="primary-action" id="heroSpeakButton" type="button">
+                <span class="action-icon">
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path
+                      d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Z"
+                    ></path>
+                    <path d="M19 11a7 7 0 0 1-14 0"></path>
+                    <path d="M12 18v3"></path>
+                    <path d="M8.5 21h7"></path>
+                  </svg>
+                </span>
+
+                <span> Talk to me </span>
+              </button>
+
+              <button class="secondary-action" id="listenWelcome" type="button">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M4 10v4"></path>
+                  <path d="M8 7v10"></path>
+                  <path d="M12 5v14"></path>
+                  <path d="M16 8v8"></path>
+                  <path d="M20 10v4"></path>
+                </svg>
+
+                Listen
+              </button>
+            </div>
+
+            <div class="quiet-note">
+              <span class="tiny-check"> ✓ </span>
+
+              You can speak naturally. No typing is required.
+            </div>
+          </div>
+
+          <!-- =========================================
+                     COMPANION VISUAL
+                ========================================== -->
+
+          <div class="companion-stage">
+            <div class="stage-decoration decoration-one"></div>
+            <div class="stage-decoration decoration-two"></div>
+
+            <div class="companion-topline">
+              <div>
+                <span class="section-kicker"> YOUR COMPANION </span>
+
+                <strong> I'm listening </strong>
+              </div>
+
+              <div class="live-status" id="liveStatus">
+                <span></span>
+                Ready
+              </div>
+            </div>
+
+            <div class="companion-visual">
+              <!-- Professional inline SVG character -->
+              <svg
+                class="companion-illustration"
+                viewBox="0 0 420 460"
+                role="img"
+                aria-label="DementiaCare companion"
+              >
+                <!-- soft shadow -->
+                <ellipse
+                  cx="210"
+                  cy="423"
+                  rx="115"
+                  ry="18"
+                  fill="rgba(20,55,70,.12)"
+                />
+
+                <!-- body -->
+                <path
+                  d="M112 417c8-88 47-132 98-132s90 44 98 132H112Z"
+                  fill="#2d806b"
+                />
+
+                <!-- kurta -->
+                <path
+                  d="M151 294c17-14 38-21 59-21s42 7 59 21l17 123H134l17-123Z"
+                  fill="#3e987e"
+                />
+
+                <!-- collar -->
+                <path d="M177 284l33 47 33-47" fill="#edf5f1" />
+
+                <!-- neck -->
+                <path
+                  d="M181 250v47c9 11 19 16 29 16s20-5 29-16v-47"
+                  fill="#c98e68"
+                />
+
+                <!-- face -->
+                <ellipse cx="210" cy="185" rx="83" ry="91" fill="#dca27a" />
+
+                <!-- hair -->
+                <path
+                  d="M130 176c-2-70 31-108 82-108 58 0 91 43 76 111-12-22-23-41-42-51-20 20-55 33-116 48Z"
+                  fill="#25383a"
+                />
+
+                <!-- hair highlights -->
+                <path
+                  d="M151 102c15-18 34-28 59-28"
+                  stroke="#496063"
+                  stroke-width="9"
+                  stroke-linecap="round"
+                  fill="none"
+                />
+
+                <!-- ears -->
+                <circle cx="127" cy="190" r="16" fill="#d79c76" />
+                <circle cx="293" cy="190" r="16" fill="#d79c76" />
+
+                <!-- eyes -->
+                <ellipse cx="177" cy="187" rx="7" ry="9" fill="#1d3034" />
+                <ellipse cx="243" cy="187" rx="7" ry="9" fill="#1d3034" />
+
+                <!-- eyebrows -->
+                <path
+                  d="M160 164c10-7 22-8 32-2"
+                  stroke="#384548"
+                  stroke-width="6"
+                  stroke-linecap="round"
+                  fill="none"
+                />
+
+                <path
+                  d="M228 162c10-6 22-5 32 2"
+                  stroke="#384548"
+                  stroke-width="6"
+                  stroke-linecap="round"
+                  fill="none"
+                />
+
+                <!-- nose -->
+                <path
+                  d="M208 188c-4 14-7 24 3 28 5 2 10 1 13-2"
+                  stroke="#a96e55"
+                  stroke-width="4"
+                  stroke-linecap="round"
+                  fill="none"
+                />
+
+                <!-- smile -->
+                <path
+                  id="characterMouth"
+                  d="M187 231c13 12 31 12 45 0"
+                  stroke="#844f48"
+                  stroke-width="5"
+                  stroke-linecap="round"
+                  fill="none"
+                />
+
+                <!-- glasses -->
+                <rect
+                  x="147"
+                  y="174"
+                  width="51"
+                  height="34"
+                  rx="13"
+                  fill="none"
+                  stroke="#334b50"
+                  stroke-width="5"
+                />
+
+                <rect
+                  x="222"
+                  y="174"
+                  width="51"
+                  height="34"
+                  rx="13"
+                  fill="none"
+                  stroke="#334b50"
+                  stroke-width="5"
+                />
+
+                <path d="M198 188h24" stroke="#334b50" stroke-width="5" />
+
+                <!-- hands -->
+                <circle cx="105" cy="368" r="24" fill="#dca27a" />
+
+                <circle cx="315" cy="368" r="24" fill="#dca27a" />
+
+                <!-- small shawl -->
+                <path
+                  d="M145 302c24 21 49 31 65 31s41-10 65-31"
+                  stroke="#e9f1ed"
+                  stroke-width="13"
+                  fill="none"
+                  stroke-linecap="round"
+                />
+              </svg>
+
+              <div class="voice-wave" id="voiceWave">
+                <span></span>
+                <span></span>
+                <span></span>
+                <span></span>
+                <span></span>
+              </div>
+            </div>
+
+            <div class="companion-message">
+              <div class="message-mark">D</div>
+
+              <div>
+                <span class="message-label"> DEMENTIACARE </span>
+
+                <p id="companionMessage">
+                  Good morning. How are you feeling today?
+                </p>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- =============================================
+                 TODAY
+            ============================================== -->
+
+        <section class="routine-section">
+          <div class="section-header">
+            <div>
+              <span class="section-kicker"> TODAY </span>
+
+              <h2>A gentle plan for your day</h2>
+            </div>
+
+            <button class="outline-button" id="routineButton" type="button">
+              View full routine
+
+              <svg viewBox="0 0 24 24">
+                <path d="M5 12h14"></path>
+                <path d="m13 6 6 6-6 6"></path>
+              </svg>
+            </button>
+          </div>
+
+          <div class="routine-layout">
+            <div class="next-activity">
+              <div class="next-label">NEXT</div>
+
+              <div class="next-icon">
+                <svg viewBox="0 0 24 24">
+                  <path d="M7 4h10"></path>
+                  <path d="M8 4v5l4 4 4-4V4"></path>
+                  <path d="M12 13v7"></path>
+                  <path d="M8 20h8"></path>
+                </svg>
+              </div>
+
+              <div class="next-copy">
+                <span> 10:00 AM </span>
+
+                <h3>Medicine</h3>
+
+                <p>I'll remind you when it is time.</p>
+              </div>
+
+              <div class="next-arrow">
+                <svg viewBox="0 0 24 24">
+                  <path d="m9 18 6-6-6-6"></path>
+                </svg>
+              </div>
+            </div>
+
+            <div class="routine-list">
+              <button class="routine-item completed">
+                <div class="routine-time">8:00</div>
+
+                <div class="routine-icon">
+                  <svg viewBox="0 0 24 24">
+                    <path d="m5 12 4 4L19 6"></path>
+                  </svg>
+                </div>
+
+                <div class="routine-info">
+                  <strong>Breakfast</strong>
+                  <span>Completed</span>
+                </div>
+
+                <span class="routine-check">✓</span>
+              </button>
+
+              <button class="routine-item current">
+                <div class="routine-time">10:00</div>
+
+                <div class="routine-icon">
+                  <svg viewBox="0 0 24 24">
+                    <rect x="6" y="4" width="12" height="16" rx="3"></rect>
+                    <path d="M9 8h6"></path>
+                    <path d="M9 12h6"></path>
+                  </svg>
+                </div>
+
+                <div class="routine-info">
+                  <strong>Medicine</strong>
+                  <span>Coming up</span>
+                </div>
+
+                <span class="routine-arrow">→</span>
+              </button>
+
+              <button class="routine-item">
+                <div class="routine-time">11:30</div>
+
+                <div class="routine-icon">
+                  <svg viewBox="0 0 24 24">
+                    <path d="M8 4h8"></path>
+                    <path d="M7 8h10"></path>
+                    <path d="M6 8v9a3 3 0 0 0 3 3h6a3 3 0 0 0 3-3V8"></path>
+                    <path d="M10 12h4"></path>
+                  </svg>
+                </div>
+
+                <div class="routine-info">
+                  <strong>Drink some water</strong>
+                  <span>Stay hydrated</span>
+                </div>
+
+                <span class="routine-arrow">→</span>
+              </button>
+
+              <button class="routine-item">
+                <div class="routine-time">4:00</div>
+
+                <div class="routine-icon">
+                  <svg viewBox="0 0 24 24">
+                    <circle cx="12" cy="12" r="8"></circle>
+                    <path d="M9 9h.01"></path>
+                    <path d="M15 9h.01"></path>
+                    <path d="M8.5 14c2 2 5 2 7 0"></path>
+                  </svg>
+                </div>
+
+                <div class="routine-info">
+                  <strong>Memory activity</strong>
+                  <span>A short activity together</span>
+                </div>
+
+                <span class="routine-arrow">→</span>
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <!-- =============================================
+                 ACTIVITIES
+            ============================================== -->
+
+        <section class="activities-section">
+          <div class="section-header">
+            <div>
+              <span class="section-kicker"> SPEND SOME TIME TOGETHER </span>
+
+              <h2>What would you like to do?</h2>
+            </div>
+          </div>
+
+          <div class="activity-grid">
+            <button class="activity-card talk-card">
+              <div class="activity-visual">
+                <svg viewBox="0 0 100 100">
+                  <path
+                    d="M28 35h44a8 8 0 0 1 8 8v24a8 8 0 0 1-8 8H49l-13 10v-10h-8a8 8 0 0 1-8-8V43a8 8 0 0 1 8-8Z"
+                  ></path>
+                  <path d="M35 51h30"></path>
+                  <path d="M35 60h21"></path>
+                </svg>
+              </div>
+
+              <div class="activity-content">
+                <span class="activity-number"> 01 </span>
+
+                <h3>Talk</h3>
+
+                <p>Have a friendly conversation.</p>
+              </div>
+
+              <span class="card-arrow">↗</span>
+            </button>
+
+            <button class="activity-card memory-card">
+              <div class="activity-visual">
+                <svg viewBox="0 0 100 100">
+                  <rect x="20" y="24" width="60" height="52" rx="8"></rect>
+                  <circle cx="39" cy="43" r="7"></circle>
+                  <path d="m25 67 17-15 12 10 8-8 13 13"></path>
+                </svg>
+              </div>
+
+              <div class="activity-content">
+                <span class="activity-number"> 02 </span>
+
+                <h3>Memories</h3>
+
+                <p>Look through familiar people and places.</p>
+              </div>
+
+              <span class="card-arrow">↗</span>
+            </button>
+
+            <button class="activity-card music-card">
+              <div class="activity-visual">
+                <svg viewBox="0 0 100 100">
+                  <path d="M62 27v43"></path>
+                  <path d="M62 27 79 23v38"></path>
+                  <ellipse cx="51" cy="72" rx="11" ry="8"></ellipse>
+                  <ellipse cx="68" cy="64" rx="11" ry="8"></ellipse>
+                </svg>
+              </div>
+
+              <div class="activity-content">
+                <span class="activity-number"> 03 </span>
+
+                <h3>Music</h3>
+
+                <p>Listen to familiar songs and stories.</p>
+              </div>
+
+              <span class="card-arrow">↗</span>
+            </button>
+
+            <button class="activity-card game-card">
+              <div class="activity-visual">
+                <svg viewBox="0 0 100 100">
+                  <rect x="22" y="29" width="56" height="42" rx="10"></rect>
+                  <path d="M38 43v14"></path>
+                  <path d="M31 50h14"></path>
+                  <circle cx="61" cy="47" r="3"></circle>
+                  <circle cx="69" cy="55" r="3"></circle>
+                </svg>
+              </div>
+
+              <div class="activity-content">
+                <span class="activity-number"> 04 </span>
+
+                <h3>Activities</h3>
+
+                <p>Play a short game or exercise.</p>
+              </div>
+
+              <span class="card-arrow">↗</span>
+            </button>
+          </div>
+        </section>
+
+        <!-- =============================================
+                 VOICE EXPERIENCE
+            ============================================== -->
+
+        <section class="voice-section" id="voiceSection">
+          <div class="voice-copy">
+            <span class="section-kicker"> YOUR VOICE IS ENOUGH </span>
+
+            <h2>Just tell me what you need.</h2>
+
+            <p>
+              You don't have to remember the right words. Speak naturally and
+              I'll do my best to understand.
+            </p>
+          </div>
+
+          <div class="voice-center">
+            <button
+              class="voice-button"
+              id="voiceButton"
+              type="button"
+              aria-label="Start speaking"
+            >
+              <div class="voice-ring ring-one"></div>
+              <div class="voice-ring ring-two"></div>
+
+              <div class="voice-core">
+                <svg viewBox="0 0 24 24">
+                  <path
+                    d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Z"
+                  ></path>
+                  <path d="M19 11a7 7 0 0 1-14 0"></path>
+                  <path d="M12 18v3"></path>
+                  <path d="M8.5 21h7"></path>
+                </svg>
+              </div>
+            </button>
+
+            <span class="voice-status" id="voiceStatus"> Tap to speak </span>
+          </div>
+
+          <div class="voice-detail">
+            <div class="voice-detail-row">
+              <span>Voice assistant</span>
+              <strong id="voiceLanguage"> English </strong>
+            </div>
+
+            <div class="voice-detail-row">
+              <span>Response</span>
+              <strong> Spoken aloud </strong>
+            </div>
+          </div>
+        </section>
+
+        <!-- =============================================
+                 TEXT CHAT
+            ============================================== -->
+
+        <section class="chat-section">
+          <div class="chat-heading">
+            <div>
+              <span class="section-kicker"> OPTIONAL </span>
+
+              <h2>Prefer typing?</h2>
+            </div>
+
+            <span class="chat-note"> Your conversation stays here. </span>
+          </div>
+
+          <div class="conversation" id="conversationArea">
+            <div class="chat-message ai-message">
+              <div class="chat-avatar">D</div>
+
+              <div class="chat-bubble">
+                <span> DementiaCare </span>
+
+                <p>You can also type here if you prefer.</p>
+              </div>
+            </div>
+          </div>
+
+          <form class="chat-input" id="chatForm">
+            <textarea
+              id="messageInput"
+              rows="1"
+              placeholder="Write a message..."
+              aria-label="Write a message"
+            ></textarea>
+
+            <button id="sendButton" type="submit" aria-label="Send message">
+              <svg viewBox="0 0 24 24">
+                <path d="m4 4 16 8-16 8 3-8-3-8Z"></path>
+                <path d="M7 12h13"></path>
+              </svg>
+            </button>
+          </form>
+        </section>
+      </main>
+
+      <!-- =================================================
+             FOOTER
+        ================================================== -->
+
+      <footer class="footer">
+        <div>
+          <strong>DementiaCare</strong>
+          <span>Designed for calm, simple everyday care.</span>
+        </div>
+
+        <div>Patient mode</div>
+      </footer>
+    </div>
+
+    <!-- =====================================================
+         LANGUAGE PANEL
+    ====================================================== -->
+
+    <div class="modal-overlay" id="languageModal" aria-hidden="true">
+      <div class="modal">
+        <div class="modal-header">
+          <div>
+            <span class="section-kicker"> LANGUAGE </span>
+
+            <h2>Choose your language</h2>
+          </div>
+
+          <button class="modal-close" data-close="languageModal" type="button">
+            ×
+          </button>
+        </div>
+
+        <div class="language-options">
+          <button
+            class="language-option active"
+            data-language="English"
+            data-code="en-IN"
+          >
+            English
+            <span>English</span>
+          </button>
+
+          <button
+            class="language-option"
+            data-language="हिन्दी"
+            data-code="hi-IN"
+          >
+            हिन्दी
+            <span>Hindi</span>
+          </button>
+
+          <button
+            class="language-option"
+            data-language="ਪੰਜਾਬੀ"
+            data-code="pa-IN"
+          >
+            ਪੰਜਾਬੀ
+            <span>Punjabi</span>
+          </button>
+
+          <button
+            class="language-option"
+            data-language="বাংলা"
+            data-code="bn-IN"
+          >
+            বাংলা
+            <span>Bengali</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- =====================================================
+         SETTINGS PANEL
+    ====================================================== -->
+
+    <div class="modal-overlay" id="settingsModal" aria-hidden="true">
+      <div class="modal settings-modal">
+        <div class="modal-header">
+          <div>
+            <span class="section-kicker"> SETTINGS </span>
+
+            <h2>Make it comfortable</h2>
+          </div>
+
+          <button class="modal-close" data-close="settingsModal" type="button">
+            ×
+          </button>
+        </div>
+
+        <div class="setting-row">
+          <div>
+            <strong>Large text</strong>
+            <span>Make important text easier to read.</span>
+          </div>
+
+          <button
+            class="toggle"
+            id="largeTextToggle"
+            type="button"
+            aria-pressed="false"
+          >
+            <span></span>
+          </button>
+        </div>
+
+        <div class="setting-row">
+          <div>
+            <strong>High contrast</strong>
+            <span>Increase the difference between text and background.</span>
+          </div>
+
+          <button
+            class="toggle"
+            id="contrastToggle"
+            type="button"
+            aria-pressed="false"
+          >
+            <span></span>
+          </button>
+        </div>
+
+        <div class="setting-row">
+          <div>
+            <strong>Spoken responses</strong>
+            <span>Let the companion read its replies aloud.</span>
+          </div>
+
+          <button
+            class="toggle active"
+            id="spokenToggle"
+            type="button"
+            aria-pressed="true"
+          >
+            <span></span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- =====================================================
+         CAREGIVER PANEL
+    ====================================================== -->
+
+    <div class="modal-overlay" id="caregiverModal" aria-hidden="true">
+      <div class="modal caregiver-modal">
+        <div class="modal-header">
+          <div>
+            <span class="section-kicker"> CAREGIVER </span>
+
+            <h2>Today's overview</h2>
+          </div>
+
+          <button class="modal-close" data-close="caregiverModal" type="button">
+            ×
+          </button>
+        </div>
+
+        <div class="caregiver-grid">
+          <div class="caregiver-stat">
+            <span>Routine</span>
+            <strong>3 / 4</strong>
+            <small>activities completed</small>
+          </div>
+
+          <div class="caregiver-stat">
+            <span>Hydration</span>
+            <strong>Good</strong>
+            <small>last reminder acknowledged</small>
+          </div>
+
+          <div class="caregiver-stat">
+            <span>Memory</span>
+            <strong>Today</strong>
+            <small>activity scheduled at 4 PM</small>
+          </div>
+
+          <div class="caregiver-stat">
+            <span>Companion</span>
+            <strong>Ready</strong>
+            <small>voice assistant available</small>
+          </div>
+        </div>
+
+        <div class="caregiver-note">
+          <strong>Important</strong>
+
+          <p>
+            This screen is for routine monitoring and caregiver support. It does
+            not replace professional medical assessment.
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <script src="script.js"></script>
+  </body>
+</html>
