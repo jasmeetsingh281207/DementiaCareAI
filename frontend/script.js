@@ -52,9 +52,11 @@ document.addEventListener("DOMContentLoaded", () => {
        STATE
     ===================================================== */
 
-  let selectedLanguage = "English";
-
-  let speechLanguage = "en-IN";
+  let selectedLanguage = "en";
+  const languageLocales = {en:"en-IN",hi:"hi-IN",hinglish:"hi-IN",as:"as-IN",bn:"bn-IN",mr:"mr-IN",ur:"ur-IN",pa:"pa-IN",gu:"gu-IN",or:"or-IN",ta:"ta-IN",te:"te-IN",kn:"kn-IN",ml:"ml-IN",ne:"ne-NP",mni:"mni-IN",brx:"brx-IN",kha:"kha-IN",grt:"grt-IN",lus:"lus-IN",trp:"trp-IN"};
+  let speechLanguage = languageLocales.en;
+  const sessionId = localStorage.getItem("dementiaCareSession") || (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()));
+  localStorage.setItem("dementiaCareSession", sessionId);
 
   let spokenResponses = true;
 
@@ -140,7 +142,24 @@ document.addEventListener("DOMContentLoaded", () => {
 
   caregiverButton.addEventListener("click", () => {
     openModal("caregiverModal");
+    loadCaregiverData();
   });
+
+  async function loadCaregiverData() {
+    try {
+      const response = await fetch("/api/caregiver/overview", { cache: "no-store" });
+      const data = await response.json();
+      if (!data.success) return;
+      const values = document.querySelectorAll("#caregiverModal .caregiver-stat strong");
+      const today = data.today || {}, memory = data.memory || {}, cognitive = data.cognitive || {};
+      if (values[0]) values[0].textContent = (today.conversation && today.conversation.messages) || 0;
+      if (values[1]) values[1].textContent = memory.total_memories || 0;
+      if (values[2]) values[2].textContent = (today.reminders && today.reminders.total) || 0;
+      if (values[3]) values[3].textContent = cognitive.total_records || 0;
+    } catch (error) {
+      console.warn("Caregiver data unavailable", error);
+    }
+  }
 
   /* =====================================================
        LANGUAGE
@@ -154,13 +173,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
       option.classList.add("active");
 
-      selectedLanguage = option.dataset.language;
-
-      speechLanguage = option.dataset.code;
-
-      languageLabel.textContent = selectedLanguage;
-
-      voiceLanguage.textContent = selectedLanguage;
+      selectedLanguage = option.dataset.code;
+      speechLanguage = languageLocales[selectedLanguage] || "en-IN";
+      languageLabel.textContent = option.dataset.language;
+      voiceLanguage.textContent = option.dataset.language;
 
       closeModal("languageModal");
 
@@ -346,11 +362,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
       resetVoiceUI();
 
-      const message = messageInput.value.trim();
-
-      if (message) {
-        sendMessage(message);
-      }
+      if (messageInput.value.trim()) voiceStatus.textContent = "Voice captured. Press Send when you are ready.";
     };
   }
 
@@ -434,6 +446,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
         body: JSON.stringify({
           message: message,
+          language: selectedLanguage,
+          session_id: sessionId,
         }),
       });
 
@@ -451,6 +465,8 @@ document.addEventListener("DOMContentLoaded", () => {
       addMessage(reply, "ai");
 
       companionMessage.textContent = reply;
+
+      speechLanguage = (data.language_info && data.language_info.speech_locale) || languageLocales[data.language] || speechLanguage;
 
       speakText(reply);
     } catch (error) {

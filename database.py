@@ -165,6 +165,7 @@ def initialize_database() -> None:
 
             CREATE TABLE IF NOT EXISTS conversation_messages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL DEFAULT 'default',
                 role TEXT NOT NULL,
                 message TEXT NOT NULL,
                 created_at TEXT NOT NULL
@@ -203,6 +204,12 @@ def initialize_database() -> None:
             ON activities(memory_id);
             """
         )
+
+        # Safe migrations for databases created by earlier releases.
+        columns = {row["name"] for row in connection.execute("PRAGMA table_info(conversation_messages)")}
+        if "session_id" not in columns:
+            connection.execute("ALTER TABLE conversation_messages ADD COLUMN session_id TEXT NOT NULL DEFAULT 'default'")
+        connection.execute("CREATE INDEX IF NOT EXISTS idx_conversation_session_created ON conversation_messages(session_id, id)")
 
         # -------------------------------------------------
         # DEFAULT PATIENT
@@ -370,6 +377,7 @@ def fetch_all(
 def save_conversation_message(
     role: str,
     message: str,
+    session_id: str | None = None,
 ) -> int:
     """
     Permanently save a conversation message.
@@ -392,13 +400,15 @@ def save_conversation_message(
     return execute(
         """
         INSERT INTO conversation_messages (
+            session_id,
             role,
             message,
             created_at
         )
-        VALUES (?, ?, ?)
+        VALUES (?, ?, ?, ?)
         """,
         (
+            session_id or "default",
             role,
             str(message),
             _now(),
@@ -408,6 +418,7 @@ def save_conversation_message(
 
 def get_conversation_history(
     limit: int = 20,
+    session_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """
     Return the most recent conversation messages
@@ -427,10 +438,11 @@ def get_conversation_history(
             message,
             created_at
         FROM conversation_messages
+        WHERE session_id = ?
         ORDER BY id DESC
         LIMIT ?
         """,
-        (limit,),
+        (session_id or "default", limit),
     )
 
     rows.reverse()

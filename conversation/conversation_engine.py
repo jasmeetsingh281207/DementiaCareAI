@@ -50,6 +50,7 @@ from typing import Any
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
+from ai.gemini_service import get_client as _canonical_gemini_client, model_name as _canonical_model_name, status as _canonical_gemini_status
 
 # DementiaCareAI application context providers.
 # These imports are deliberately kept here and language.py is imported
@@ -77,7 +78,7 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 # Keep the known-working model for this project.
 GEMINI_MODEL = os.getenv(
     "GEMINI_MODEL",
-    "gemini-3.6-flash",
+    _canonical_model_name(),
 )
 
 
@@ -93,22 +94,7 @@ def get_gemini_client():
     Lazily create and return the Gemini client.
     """
 
-    global _client
-
-    if _client is not None:
-        return _client
-
-    if not GEMINI_API_KEY:
-        raise RuntimeError(
-            "GEMINI_API_KEY is not configured. "
-            "Add GEMINI_API_KEY to the project's .env file."
-        )
-
-    _client = genai.Client(
-        api_key=GEMINI_API_KEY
-    )
-
-    return _client
+    return _canonical_gemini_client()
 
 
 # ==========================================================
@@ -2123,6 +2109,7 @@ def _memory_matches_message(
 def _build_runtime_context(
     message: str,
     language_info: dict[str, Any],
+    session_id: str | None = None,
 ) -> dict[str, Any]:
     """
     Gather trusted application context for one companion turn.
@@ -2143,7 +2130,7 @@ def _build_runtime_context(
         patient_profile = {}
 
     try:
-        history = get_conversation_history(limit=10)
+        history = get_conversation_history(limit=10, session_id=session_id)
     except Exception:
         logger.warning(
             "Unable to load conversation history.",
@@ -2243,10 +2230,7 @@ def process_message(
     - persist the user and assistant messages exactly once
     - return a stable API dictionary
 
-    session_id is accepted for API compatibility. The current database
-    conversation store exposes a single active conversation history and
-    does not accept a session_id argument, so it is not passed into the
-    database layer.
+    Conversation history is isolated by the supplied session identifier.
     """
     cleaned_message = _clean_text(message)
 
@@ -2265,6 +2249,7 @@ def process_message(
     context = _build_runtime_context(
         message=cleaned_message,
         language_info=resolved_language_info,
+        session_id=session_id,
     )
 
     # Persist the patient message once, before generation.
@@ -2272,6 +2257,7 @@ def process_message(
         save_conversation_message(
             role="user",
             message=cleaned_message,
+            session_id=session_id,
         )
     except Exception:
         logger.warning(
@@ -2352,6 +2338,7 @@ def process_message(
             save_conversation_message(
                 role="assistant",
                 message=response_text,
+                session_id=session_id,
             )
 
         except Exception:
@@ -2452,6 +2439,7 @@ def process_message(
         save_conversation_message(
             role="assistant",
             message=response_text,
+            session_id=session_id,
         )
     except Exception:
         logger.warning(
@@ -2500,12 +2488,13 @@ def get_engine_status() -> dict[str, Any]:
     """
     Return conversation-engine health without making a Gemini request.
     """
-    configured = bool(GEMINI_API_KEY)
+    gemini = _canonical_gemini_status()
 
     return {
         "available": True,
         "engine": "conversation_engine",
-        "gemini_configured": configured,
+        "gemini_configured": gemini["configured"],
+        "gemini": gemini,
         "gemini_model": GEMINI_MODEL,
         "local_fallback": True,
         "transient_retry_enabled": True,

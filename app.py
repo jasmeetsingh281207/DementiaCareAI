@@ -5,7 +5,7 @@ from flask import (
     jsonify,
     request,
     send_from_directory,
-    Response,
+    send_file,
 )
 
 # ============================================================
@@ -43,25 +43,7 @@ from voice import (
     validate_audio_payload,
     synthesize_speech,
 )
-
-
-def _sanitize_patient_response_text(response: str) -> str:
-    """Final API boundary protection for the known malformed response."""
-    if not isinstance(response, str):
-        return ""
-    cleaned = " ".join(response.strip().split())
-    lowered = cleaned.casefold()
-    patterns = (
-        "birthday celebration is your family",
-        "birthday celebration is your relative",
-        "birthday celebration is your mother",
-        "birthday celebration is your father",
-        "birthday celebration is your sister",
-        "birthday celebration is your brother",
-    )
-    if any(pattern in lowered for pattern in patterns):
-        return "I don't have enough information to answer that yet."
-    return cleaned
+from ai.gemini_service import status as get_gemini_status
 
 
 # ============================================================
@@ -326,19 +308,21 @@ def _optional_language(data):
     The language module remains the single source of truth for
     supported languages and aliases.
 
-    If no language is supplied, None is returned so that the
-    language module can perform local automatic detection.
+    IMPORTANT:
+    If no language is supplied, None is returned. This allows
+    the conversation engine to perform local automatic
+    language detection.
     """
 
-    language_value = data.get(
+    language = data.get(
         "language"
     )
 
-    if language_value is None:
+    if language is None:
         return None, None
 
     if not isinstance(
-        language_value,
+        language,
         str,
     ):
         return (
@@ -346,13 +330,13 @@ def _optional_language(data):
             "language must be text.",
         )
 
-    language_value = language_value.strip()
+    language = language.strip()
 
-    if not language_value:
+    if not language:
         return None, None
 
     normalized = normalize_language(
-        language_value
+        language
     )
 
     if not normalized:
@@ -375,39 +359,7 @@ def _get_language_info(
     Resolve canonical language metadata.
 
     The language.py module owns the actual language definitions.
-
-    This helper accepts either a language code string or a language
-    metadata dictionary. This is important because local detection
-    may return a full dictionary.
     """
-
-    if isinstance(
-        language_code,
-        dict,
-    ):
-        language_code = (
-            language_code.get("code")
-            or language_code.get("language")
-            or language_code.get("detected_language")
-        )
-
-    if isinstance(
-        language_code,
-        str,
-    ):
-        language_code = language_code.strip()
-
-        if language_code:
-            try:
-                normalized_code = normalize_language(
-                    language_code
-                )
-
-                if normalized_code:
-                    language_code = normalized_code
-
-            except Exception:
-                pass
 
     if language_code:
         try:
@@ -448,13 +400,13 @@ def _prepare_language_context(
     Prepare language information before entering the companion
     engine.
 
-    IMPORTANT:
-    - Language detection is always local.
-    - Explicit language selection is authoritative.
-    - detected_language may be either a language code string
-      OR a full detection dictionary returned by language.py.
-    - All language values passed to the companion engine are
-      canonical language codes.
+    Language detection must remain local.
+
+    If the caller explicitly selected a language, that language
+    is authoritative for the interaction.
+
+    If no language was selected, language.py performs local
+    detection.
     """
 
     context = prepare_for_companion(
@@ -468,185 +420,77 @@ def _prepare_language_context(
     ):
         context = {}
 
-    # ------------------------------------------------------------
-    # Explicit language selection is authoritative.
-    # ------------------------------------------------------------
+    selected_code = requested_language
 
-    if requested_language:
-        interaction_code = normalize_language(
-            requested_language
+    detected_code = (
+        context.get(
+            "detected_language"
         )
+        or context.get(
+            "language"
+        )
+    )
+    if isinstance(detected_code, dict):
+        detected_code = detected_code.get("code") or detected_code.get("language")
 
-        if not interaction_code:
-            interaction_code = "en"
-
+    if selected_code:
+        interaction_code = selected_code
         selection_source = "explicit_selection"
 
     else:
-        # --------------------------------------------------------
-        # Local automatic detection.
-        #
-        # prepare_for_companion() may return:
-        #   detected_language = "hi"
-        # OR
-        #   detected_language = {"code": "hi", ...}
-        #
-        # Never pass the dictionary itself to get_language().
-        # --------------------------------------------------------
-
-        raw_detected = context.get(
-            "detected_language"
-        )
-
-        detected_code = None
-
-        if isinstance(
-            raw_detected,
-            dict,
-        ):
-            detected_code = (
-                raw_detected.get("code")
-                or raw_detected.get("language")
-                or raw_detected.get("detected_language")
-            )
-
-        elif isinstance(
-            raw_detected,
-            str,
-        ):
-            detected_code = raw_detected
-
-        # Some implementations may store the detected code in
-        # context["language"] instead.
-        if not detected_code:
-            raw_language = context.get(
-                "language"
-            )
-
-            if isinstance(
-                raw_language,
-                dict,
-            ):
-                detected_code = (
-                    raw_language.get("code")
-                    or raw_language.get("language")
-                    or raw_language.get("detected_language")
-                )
-
-            elif isinstance(
-                raw_language,
-                str,
-            ):
-                detected_code = raw_language
-
-        if detected_code:
-            detected_code = normalize_language(
-                detected_code
-            )
-
         interaction_code = (
             detected_code
             or "en"
         )
-
         selection_source = "local_detection"
-
-    # ------------------------------------------------------------
-    # Canonical metadata for the interaction language.
-    # ------------------------------------------------------------
 
     language_info = _get_language_info(
         interaction_code
     )
 
-    # ------------------------------------------------------------
-    # Canonical metadata for the detected language.
-    # ------------------------------------------------------------
-
-    raw_detected = context.get(
-        "detected_language"
+    detected_info = _get_language_info(
+        detected_code or interaction_code
     )
-
-    detected_code = None
-    detected_info = None
-
-    if isinstance(
-        raw_detected,
-        dict,
-    ):
-        detected_code = (
-            raw_detected.get("code")
-            or raw_detected.get("language")
-            or raw_detected.get("detected_language")
-        )
-
-        if detected_code:
-            detected_code = normalize_language(
-                detected_code
-            )
-
-        # Preserve the detailed local detection result when
-        # language.py already provided it.
-        if detected_code:
-            detected_info = dict(
-                raw_detected
-            )
-
-    elif isinstance(
-        raw_detected,
-        str,
-    ):
-        detected_code = normalize_language(
-            raw_detected
-        )
-
-    if not detected_code:
-        detected_code = interaction_code
-
-    if not isinstance(
-        detected_info,
-        dict,
-    ):
-        detected_info = _get_language_info(
-            detected_code
-        )
-
-    # ------------------------------------------------------------
-    # Store one consistent shape for every caller.
-    # ------------------------------------------------------------
 
     context["language"] = interaction_code
-    context["detected_language"] = detected_code
-    context["language_info"] = language_info
-    context["detected_language_info"] = detected_info
-    context["selection_source"] = selection_source
 
-    context["base_language"] = language_info.get(
+    context.setdefault(
+        "detected_language",
+        detected_code or interaction_code,
+    )
+
+    context.setdefault(
+        "language_info",
+        language_info,
+    )
+
+    context.setdefault(
+        "detected_language_info",
+        detected_info,
+    )
+
+    context.setdefault(
+        "selection_source",
+        selection_source,
+    )
+
+    context.setdefault(
         "base_language",
-        interaction_code,
-    )
-
-    context["is_hinglish"] = bool(
         language_info.get(
-            "is_hinglish",
-            interaction_code == "hinglish",
-        )
+            "base_language",
+            interaction_code,
+        ),
     )
 
-    if isinstance(
-        raw_detected,
-        dict,
-    ):
-        confidence = raw_detected.get(
-            "confidence"
-        )
-
-        if confidence is not None:
-            context["confidence"] = confidence
-
-    # This flag makes it explicit that language detection happened
-    # locally and never through Gemini.
-    context["local_detection"] = True
+    context.setdefault(
+        "is_hinglish",
+        bool(
+            language_info.get(
+                "is_hinglish",
+                interaction_code == "hinglish",
+            )
+        ),
+    )
 
     return context
 
@@ -680,8 +524,8 @@ def _attach_language_metadata(
         True,
     )
 
-    result["response"] = _sanitize_patient_response_text(
-        str(response_text)
+    result["response"] = (
+        str(response_text).strip()
     )
 
     result["api"] = api_path
@@ -785,57 +629,6 @@ def _attach_language_metadata(
     )
 
     return result
-
-
-def _gemini_available_from_status(engine_status):
-    """
-    Return a reliable boolean Gemini availability value.
-
-    Do not assume Gemini is configured merely because the companion
-    engine exists. Prefer explicit boolean status fields.
-    """
-
-    if not isinstance(
-        engine_status,
-        dict,
-    ):
-        return False
-
-    value = engine_status.get(
-        "gemini_available"
-    )
-
-    if isinstance(
-        value,
-        bool,
-    ):
-        return value
-
-    value = engine_status.get(
-        "gemini"
-    )
-
-    if isinstance(
-        value,
-        bool,
-    ):
-        return value
-
-    if isinstance(
-        value,
-        str,
-    ):
-        return value.strip().lower() in {
-            "true",
-            "available",
-            "configured",
-            "ready",
-            "connected",
-            "active",
-            "enabled",
-        }
-
-    return False
 
 
 def _safe_integer(
@@ -1235,14 +1028,9 @@ def language_list():
     methods=["POST"],
 )
 def language_detect():
-    """
-    Detect the language of text using language.py only.
-
-    This endpoint is intentionally local-only. Gemini is never
-    called for language detection.
-    """
 
     try:
+
         data = _json_body()
 
         text = data.get(
@@ -1273,9 +1061,12 @@ def language_detect():
                 400,
             )
 
-        # --------------------------------------------------------
-        # LOCAL DETECTION ONLY.
-        # --------------------------------------------------------
+        # ----------------------------------------------------
+        # IMPORTANT:
+        # detect_language() must remain a LOCAL operation.
+        # This endpoint must never call Gemini simply to
+        # identify a language.
+        # ----------------------------------------------------
 
         result = detect_language(
             text
@@ -1287,67 +1078,45 @@ def language_detect():
         ):
             result = {
                 "success": True,
-                "code": str(result),
+                "language": str(result),
             }
 
         detected_code = (
-            result.get("code")
-            or result.get("language")
-            or result.get("detected_language")
-        )
-
-        # Handle the unlikely case where the detector returns
-        # another nested language dictionary.
-        if isinstance(
-            detected_code,
-            dict,
-        ):
-            detected_code = (
-                detected_code.get("code")
-                or detected_code.get("language")
-                or detected_code.get("detected_language")
+            result.get(
+                "language"
             )
+            or result.get(
+                "detected_language"
+            )
+        )
 
         if detected_code:
-            detected_code = normalize_language(
-                detected_code
+
+            result.setdefault(
+                "detected_language",
+                detected_code,
             )
 
-        if not detected_code:
-            detected_code = "en"
-
-        language_info = _get_language_info(
-            detected_code
-        )
-
-        result["success"] = True
-        result["code"] = detected_code
-        result["language"] = detected_code
-        result["detected_language"] = detected_code
-        result["language_info"] = language_info
-        result["base_language"] = language_info.get(
-            "base_language",
-            detected_code,
-        )
-        result["is_hinglish"] = bool(
-            language_info.get(
-                "is_hinglish",
-                detected_code == "hinglish",
+            result.setdefault(
+                "language_info",
+                _get_language_info(
+                    detected_code
+                ),
             )
+
+        result.setdefault(
+            "success",
+            True,
         )
+
         result["local_detection"] = True
-
-        # Keep the detector's method/confidence when supplied.
-        result["method"] = result.get(
-            "method",
-            "local",
-        )
 
         return jsonify(
             result
         )
 
     except Exception as exc:
+
         print(
             "LANGUAGE DETECTION ERROR:"
         )
@@ -1356,7 +1125,6 @@ def language_detect():
         return _api_error(
             str(exc),
             500,
-            local_detection=True,
         )
 
 
@@ -1685,70 +1453,6 @@ def voice_instructions():
         )
 
 
-
-# ============================================================
-# SERVER-SIDE TTS
-# ============================================================
-
-@app.route(
-    "/api/voice/speak",
-    methods=["POST"],
-)
-def voice_speak():
-    """Return MP3 speech for the requested language.
-
-    This is the primary TTS endpoint for the patient UI. The frontend first
-    tries this endpoint so Punjabi and other supported languages do not depend
-    on a browser-installed voice.
-    """
-    try:
-        data = _json_body()
-        text = data.get("text", "")
-        language = data.get("language") or "en"
-
-        if not isinstance(text, str):
-            return _api_error("text_must_be_text", 400)
-        text = text.strip()
-        if not text:
-            return _api_error("text_required", 400)
-
-        if not isinstance(language, str):
-            return _api_error("language_must_be_text", 400)
-
-        language = normalize_language(language)
-        if not language:
-            return _api_error("unsupported_language", 400)
-
-        result = synthesize_speech(
-            text=text,
-            language=language,
-        )
-
-        if not result.get("success"):
-            status = 503 if result.get("error") in {
-                "server_tts_dependency_missing",
-                "server_tts_language_not_supported",
-                "server_tts_failed",
-            } else 400
-            return jsonify(result), status
-
-        return Response(
-            result["audio"],
-            mimetype="audio/mpeg",
-            headers={
-                "Content-Disposition": "inline; filename=dementiacareai-response.mp3",
-                "Cache-Control": "no-store",
-                "X-DementiaCareAI-Language": result["language"],
-                "X-DementiaCareAI-Voice-Provider": result["provider"],
-            },
-        )
-
-    except Exception as exc:
-        print("VOICE SPEAK ERROR:")
-        print(exc)
-        return _api_error(str(exc), 500, service="voice")
-
-
 # ============================================================
 # VOICE TRANSCRIPT
 # ============================================================
@@ -1910,6 +1614,23 @@ def voice_audio_validate():
         )
 
 
+@app.route("/api/voice/speak", methods=["POST"])
+def voice_speak():
+    """Stream server-generated audio; browser TTS remains the frontend fallback."""
+    data = _json_body()
+    text = _required_text(data, "text")
+    language_code, language_error = _optional_language(data)
+    if not text:
+        return _api_error("text is required.", 400)
+    if language_error:
+        return _api_error(language_error, 400)
+    result = synthesize_speech(text, language_code or "en")
+    if not result.get("success"):
+        return jsonify(result), 503
+    from io import BytesIO
+    return send_file(BytesIO(result["audio"]), mimetype=result["content_type"], as_attachment=False, download_name="speech.mp3")
+
+
 # ============================================================
 # API INFORMATION
 # ============================================================
@@ -1978,9 +1699,6 @@ def api_information():
             ),
             "transcript": (
                 "/api/voice/transcript"
-            ),
-            "speak": (
-                "/api/voice/speak"
             ),
             "audio_validation": (
                 "/api/voice/audio/validate"
@@ -2067,7 +1785,21 @@ def api_information():
     methods=["GET"],
 )
 def home():
+    frontend_dir = Path(__file__).resolve().parent / "frontend"
+    return send_from_directory(
+        str(frontend_dir),
+        "index.html",
+    )
+@app.route("/style.css", methods=["GET"])
+def frontend_style():
+    return send_from_directory(Path(__file__).resolve().parent / "frontend", "style.css")
 
+@app.route("/script.js", methods=["GET"])
+def frontend_script():
+    return send_from_directory(Path(__file__).resolve().parent / "frontend", "script.js")
+
+@app.route("/api/info", methods=["GET"])
+def home_api_info():
     return jsonify({
         "name": "DementiaCareAI",
         "status": "running",
@@ -2152,9 +1884,7 @@ def health_check():
                 "status": voice_info,
             },
 
-            "gemini": _gemini_available_from_status(
-                engine_status
-            ),
+            "gemini": get_gemini_status(),
 
             "companion_engine": engine_status,
 
@@ -2225,9 +1955,7 @@ def api_status():
 
             "local_language_detection": True,
 
-            "gemini": _gemini_available_from_status(
-                engine_status
-            ),
+            "gemini": get_gemini_status(),
 
             "language_status": language_info,
             "voice_status": voice_info,
@@ -3937,2116 +3665,169 @@ def internal_error(error):
 
 
 # ============================================================
-# DEVELOPMENT VOICE TEST / STT + TTS DEMO
-# ============================================================
-
-@app.route("/voice-test", methods=["GET"])
-def voice_test():
-    """Patient-friendly companion UI with persistent text and voice input."""
-    return r'''<!DOCTYPE html>
-<html>
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>DementiaCareAI - Companion</title>
-<style>
-:root{font-family:Arial,sans-serif;color:#17202a;background:#f7f8fa}
-*{box-sizing:border-box}
-html,body{margin:0;min-height:100%;background:#f7f8fa}
-body{padding:0 0 128px}
-.app{max-width:920px;margin:0 auto;padding:18px 18px 30px}
-.header{background:#fff;border-radius:16px;padding:20px;margin-bottom:14px;box-shadow:0 2px 12px rgba(0,0,0,.07)}
-.header h1{margin:0 0 8px;font-size:30px}
-.header p{margin:0;color:#5d6670;line-height:1.5}
-.controls{background:#fff;border-radius:16px;padding:16px;margin-bottom:14px;box-shadow:0 2px 12px rgba(0,0,0,.07)}
-label{font-weight:700;display:block;margin-bottom:8px}
-select{width:100%;font-size:17px;padding:12px;border:1px solid #cfd5db;border-radius:10px;background:#fff}
-.status{margin-top:12px;padding:11px 13px;border-radius:10px;background:#eef5ee;font-weight:700}
-.language-info{margin-top:8px;color:#59636e;font-size:14px}
-.chat{min-height:420px;padding:8px 0 18px}
-.empty{background:#fff;border-radius:16px;padding:28px 22px;color:#69727c;text-align:center;box-shadow:0 2px 12px rgba(0,0,0,.05)}
-.message{max-width:78%;margin:12px 0;padding:14px 16px;border-radius:17px;line-height:1.55;white-space:pre-wrap;word-break:break-word;box-shadow:0 1px 5px rgba(0,0,0,.06)}
-.message.patient{margin-left:auto;background:#e8f0fe;border-bottom-right-radius:5px}
-.message.ai{margin-right:auto;background:#fff;border-bottom-left-radius:5px}
-.message-label{font-size:12px;font-weight:700;color:#66717d;margin-bottom:5px}
-.composer-shell{position:fixed;left:0;right:0;bottom:0;background:rgba(247,248,250,.97);border-top:1px solid #dfe3e7;padding:10px 14px 14px;z-index:1000;backdrop-filter:blur(8px)}
-.composer{max-width:920px;margin:0 auto;background:#fff;border:1px solid #cfd5db;border-radius:18px;padding:9px;box-shadow:0 5px 24px rgba(0,0,0,.12)}
-.composer-row{display:flex;align-items:flex-end;gap:8px}
-#message{flex:1;min-height:48px;max-height:150px;resize:none;border:0;outline:0;font:inherit;font-size:17px;line-height:1.4;padding:10px 9px;background:transparent}
-.icon-button,.send-button{height:46px;border:0;border-radius:13px;cursor:pointer;font-size:20px;font-weight:700;flex:0 0 auto}
-.icon-button{width:50px;background:#edf1f5}
-.icon-button.recording{background:#fbe4e4}
-.send-button{padding:0 18px;background:#17202a;color:#fff;font-size:16px}
-button:disabled{opacity:.5;cursor:not-allowed}
-.composer-hint{font-size:12px;color:#6d7680;padding:5px 8px 0}
-#interim{font-size:13px;color:#65707b;margin:8px 4px 0;min-height:18px}
-@media(max-width:600px){
-  .app{padding:12px 10px 25px}
-  .header h1{font-size:25px}
-  .message{max-width:90%}
-  .send-button{padding:0 13px}
-  .composer-hint{display:none}
-}
-</style>
-</head>
-<body>
-<div class="app">
-  <section class="header">
-    <h1>🧠 DementiaCareAI</h1>
-    <p>Talk naturally with the companion. The patient can <strong>type</strong> or use the <strong>microphone</strong> at any time. Both inputs use the same companion conversation pipeline.</p>
-  </section>
-
-  <section class="controls">
-    <label for="language">Language</label>
-    <select id="language">
-      <option value="">Auto Detect</option>
-      <option value="en">English</option>
-      <option value="hi">Hindi</option>
-      <option value="hinglish">Hinglish</option>
-      <option value="as">Assamese</option>
-      <option value="bn">Bengali</option>
-      <option value="mr">Marathi</option>
-      <option value="ur">Urdu</option>
-      <option value="pa">Punjabi</option>
-      <option value="gu">Gujarati</option>
-      <option value="or">Odia</option>
-      <option value="ta">Tamil</option>
-      <option value="te">Telugu</option>
-      <option value="kn">Kannada</option>
-      <option value="ml">Malayalam</option>
-      <option value="ne">Nepali</option>
-      <option value="mni">Manipuri / Meitei</option>
-      <option value="brx">Bodo</option>
-      <option value="kha">Khasi</option>
-      <option value="grt">Garo</option>
-      <option value="lus">Mizo</option>
-      <option value="trp">Tripuri / Kokborok</option>
-    </select>
-    <div id="status" class="status">Ready.</div>
-    <div id="languageInfo" class="language-info"></div>
-  </section>
-
-  <main id="chat" class="chat">
-    <div id="empty" class="empty">Your conversation will appear here. Type a message or press 🎤 below.</div>
-  </main>
-</div>
-
-<div class="composer-shell">
-  <div class="composer">
-    <div class="composer-row">
-      <textarea id="message" rows="1" placeholder="Message DementiaCareAI..." aria-label="Message DementiaCareAI"></textarea>
-      <button id="micButton" class="icon-button" type="button" title="Voice input" aria-label="Start voice input">🎤</button>
-      <button id="stopButton" class="icon-button" type="button" title="Stop listening" aria-label="Stop listening" disabled>⏹</button>
-      <button id="sendButton" class="send-button" type="button">Send</button>
-    </div>
-    <div id="interim"></div>
-    <div class="composer-hint">Enter sends the message. Shift+Enter makes a new line. The microphone fills the message box, then you can review and send it.</div>
-  </div>
-</div>
-
-<script>
-const languageSelect = document.getElementById("language");
-const messageBox = document.getElementById("message");
-const micButton = document.getElementById("micButton");
-const stopButton = document.getElementById("stopButton");
-const sendButton = document.getElementById("sendButton");
-const statusBox = document.getElementById("status");
-const languageInfoBox = document.getElementById("languageInfo");
-const chat = document.getElementById("chat");
-const empty = document.getElementById("empty");
-const interimBox = document.getElementById("interim");
-
-const VOICE_LOCALES = {
-  en:"en-IN", hi:"hi-IN", hinglish:"hi-IN", as:"as-IN", bn:"bn-IN", mr:"mr-IN",
-  ur:"ur-IN", pa:"pa-IN", gu:"gu-IN", or:"or-IN", ta:"ta-IN", te:"te-IN",
-  kn:"kn-IN", ml:"ml-IN", ne:"ne-NP", mni:"mni-IN", brx:"brx-IN", kha:"kha-IN",
-  grt:"grt-IN", lus:"lus-IN", trp:"trp-IN"
-};
-
-let recognition = null;
-let listening = false;
-let finalTranscript = "";
-
-function setStatus(text){ statusBox.textContent = text; }
-function localeForLanguage(code){ return VOICE_LOCALES[code] || "en-IN"; }
-function recognitionConstructor(){ return window.SpeechRecognition || window.webkitSpeechRecognition || null; }
-
-function addMessage(role, text){
-  if(empty) empty.remove();
-  const wrapper = document.createElement("div");
-  wrapper.className = "message " + role;
-  const label = document.createElement("div");
-  label.className = "message-label";
-  label.textContent = role === "patient" ? "You" : "DementiaCareAI";
-  const content = document.createElement("div");
-  content.textContent = text;
-  wrapper.appendChild(label);
-  wrapper.appendChild(content);
-  chat.appendChild(wrapper);
-  wrapper.scrollIntoView({behavior:"smooth", block:"end"});
-}
-
-function availableVoices(){
-  return "speechSynthesis" in window ? (window.speechSynthesis.getVoices() || []) : [];
-}
-
-function findExactVoice(locale){
-  const wanted = String(locale || "").toLowerCase();
-  return availableVoices().find(v => v.lang && v.lang.toLowerCase() === wanted) || null;
-}
-
-let currentAudio = null;
-
-async function speakResponse(text, languageCode, locale){
-  const code = String(languageCode || "en").trim().toLowerCase();
-  const speechLocale = String(locale || localeForLanguage(code)).trim();
-
-  if(currentAudio){
-    try{ currentAudio.pause(); currentAudio.currentTime = 0; }catch(e){}
-    currentAudio = null;
-  }
-
-  if("speechSynthesis" in window){
-    window.speechSynthesis.cancel();
-  }
-
-  // Primary TTS: server-side gTTS. This does not depend on an installed
-  // Windows/browser voice and uses the exact requested language code.
-  try{
-    setStatus("DementiaCareAI is preparing the voice response...");
-
-    const ttsResponse = await fetch("/api/voice/speak", {
-      method:"POST",
-      headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({text:text, language:code})
-    });
-
-    if(ttsResponse.ok){
-      const blob = await ttsResponse.blob();
-      if(blob && blob.size > 0){
-        const url = URL.createObjectURL(blob);
-        const audio = new Audio(url);
-        currentAudio = audio;
-        audio.onplay = () => setStatus("DementiaCareAI is speaking in " + speechLocale + ".");
-        audio.onended = () => {
-          URL.revokeObjectURL(url);
-          if(currentAudio === audio) currentAudio = null;
-          setStatus("DementiaCareAI finished speaking.");
-        };
-        audio.onerror = () => {
-          URL.revokeObjectURL(url);
-          if(currentAudio === audio) currentAudio = null;
-          fallbackToBrowserSpeech(text, speechLocale);
-        };
-        await audio.play();
-        return;
-      }
-    }
-
-    let detail = "";
-    try{
-      const errorData = await ttsResponse.json();
-      detail = errorData.error || "";
-    }catch(e){}
-
-    console.warn("Server TTS unavailable", ttsResponse.status, detail);
-  }catch(error){
-    console.warn("Server TTS request failed", error);
-  }
-
-  // Fallback: browser speech only when an exact locale voice exists.
-  fallbackToBrowserSpeech(text, speechLocale);
-}
-
-function fallbackToBrowserSpeech(text, locale){
-  if(!("speechSynthesis" in window)){
-    setStatus("Text response is ready, but this browser does not support speech output.");
-    return;
-  }
-
-  const voice = findExactVoice(locale);
-  if(!voice){
-    setStatus("Text response is ready. Server voice was unavailable and no exact installed voice was found for " + locale + ". No unrelated-language voice will be used.");
-    return;
-  }
-
-  const utterance = new SpeechSynthesisUtterance(text);
-  utterance.lang = locale;
-  utterance.voice = voice;
-  utterance.rate = 0.88;
-  utterance.pitch = 1;
-  utterance.volume = 1;
-  utterance.onstart = () => setStatus("DementiaCareAI is speaking using " + voice.name + " (" + voice.lang + ").");
-  utterance.onend = () => setStatus("DementiaCareAI finished speaking.");
-  utterance.onerror = e => setStatus("Speech output error: " + (e.error || "unknown"));
-  window.speechSynthesis.speak(utterance);
-}
-
-async function sendToCompanion(text){
-  const selectedLanguage = languageSelect.value;
-  const body = {message:text, session_id:"voice-demo"};
-  if(selectedLanguage) body.language = selectedLanguage;
-
-  const response = await fetch("/api/chat", {
-    method:"POST",
-    headers:{"Content-Type":"application/json"},
-    body:JSON.stringify(body)
-  });
-
-  const data = await response.json();
-  if(!response.ok || !data.success){
-    throw new Error(data.error || data.message || "Conversation failed.");
-  }
-
-  const answer = data.response || data.message || "";
-  addMessage("ai", answer);
-
-  const selected = data.language || selectedLanguage || "en";
-  const detected = data.detected_language || selected;
-  const confidence = data.language_confidence;
-  const locale = data.speech_locale || localeForLanguage(selected);
-
-  languageInfoBox.textContent =
-    "Response language: " + selected +
-    " | Detected: " + detected +
-    (confidence !== undefined ? " | Confidence: " + confidence : "") +
-    " | Speech locale: " + locale;
-
-  speakResponse(answer, selected, locale);
-}
-
-async function sendCurrentMessage(){
-  const text = messageBox.value.trim();
-  if(!text){
-    setStatus("Please type a message or use the microphone.");
-    messageBox.focus();
-    return;
-  }
-
-  try{
-    sendButton.disabled = true;
-    micButton.disabled = true;
-    addMessage("patient", text);
-    messageBox.value = "";
-    autoResize();
-    interimBox.textContent = "";
-    setStatus("DementiaCareAI is thinking...");
-    await sendToCompanion(text);
-  }catch(error){
-    console.error(error);
-    setStatus("Error: " + error.message);
-  }finally{
-    sendButton.disabled = false;
-    micButton.disabled = false;
-    messageBox.focus();
-  }
-}
-
-function createRecognition(){
-  const Recognition = recognitionConstructor();
-  if(!Recognition) return null;
-
-  const instance = new Recognition();
-  instance.continuous = false;
-  instance.interimResults = true;
-  instance.maxAlternatives = 1;
-  instance.lang = localeForLanguage(languageSelect.value || "en");
-
-  instance.onstart = () => {
-    listening = true;
-    finalTranscript = "";
-    micButton.disabled = true;
-    stopButton.disabled = false;
-    micButton.classList.add("recording");
-    setStatus("Listening... speak naturally.");
-  };
-
-  instance.onresult = event => {
-    let interim = "";
-    let finalText = "";
-
-    for(let i = event.resultIndex; i < event.results.length; i++){
-      const piece = event.results[i][0].transcript;
-      if(event.results[i].isFinal) finalText += piece;
-      else interim += piece;
-    }
-
-    if(interim) interimBox.textContent = "Hearing: " + interim;
-    if(finalText.trim()){
-      finalTranscript = finalText.trim();
-      messageBox.value = finalTranscript;
-      autoResize();
-      interimBox.textContent = "Transcript ready. Review it in the message box, then press Send.";
-    }
-  };
-
-  instance.onerror = event => {
-    console.error("STT error", event);
-    listening = false;
-    micButton.disabled = false;
-    stopButton.disabled = true;
-    micButton.classList.remove("recording");
-
-    if(event.error === "not-allowed" || event.error === "service-not-allowed"){
-      setStatus("Microphone permission was denied. Please allow microphone access.");
-    }else if(event.error === "language-not-supported"){
-      setStatus("This browser does not provide speech recognition for " + instance.lang + ". You can still type the message.");
-    }else{
-      setStatus("Speech recognition error: " + (event.error || "unknown"));
-    }
-  };
-
-  instance.onend = () => {
-    listening = false;
-    micButton.disabled = false;
-    stopButton.disabled = true;
-    micButton.classList.remove("recording");
-
-    if(finalTranscript.trim()){
-      messageBox.value = finalTranscript.trim();
-      autoResize();
-      setStatus("Voice transcript is in the message box. Review and press Send.");
-    }else if(!messageBox.value.trim()){
-      setStatus("No speech was captured. Please try again or type a message.");
-    }
-  };
-
-  return instance;
-}
-
-micButton.addEventListener("click", () => {
-  const Recognition = recognitionConstructor();
-  if(!Recognition){
-    setStatus("This browser does not support SpeechRecognition. Please use Chrome or Edge, or type the message.");
-    return;
-  }
-  if(listening) return;
-
-  recognition = createRecognition();
-  if(!recognition) return;
-
-  try{
-    recognition.start();
-  }catch(error){
-    console.error(error);
-    setStatus("Could not start the microphone: " + error.message);
-  }
-});
-
-stopButton.addEventListener("click", () => {
-  if(recognition && listening){
-    recognition.stop();
-    setStatus("Stopping microphone...");
-  }
-});
-
-sendButton.addEventListener("click", sendCurrentMessage);
-
-messageBox.addEventListener("keydown", event => {
-  if(event.key === "Enter" && !event.shiftKey){
-    event.preventDefault();
-    sendCurrentMessage();
-  }
-});
-
-function autoResize(){
-  messageBox.style.height = "auto";
-  messageBox.style.height = Math.min(messageBox.scrollHeight, 150) + "px";
-}
-messageBox.addEventListener("input", autoResize);
-autoResize();
-
-languageSelect.addEventListener("change", () => {
-  const locale = localeForLanguage(languageSelect.value || "en");
-  if(recognition && !listening) recognition.lang = locale;
-  setStatus("Voice language set to " + locale + ".");
-});
-
-if("speechSynthesis" in window){
-  window.speechSynthesis.getVoices();
-  window.speechSynthesis.onvoiceschanged = () => window.speechSynthesis.getVoices();
-}
-</script>
-</body>
-</html>'''
-
-# ============================================================
-# CAREGIVER DASHBOARD FRONTEND
+# DEVELOPMENT VOICE TEST
 # ============================================================
 
 @app.route(
-    "/caregiver-dashboard",
+    "/voice-test",
     methods=["GET"],
 )
-def caregiver_dashboard():
-    return """
-<!DOCTYPE html>
+def voice_test():
+    """Development patient conversation page.
+
+    The button is explicitly type=button and the handler prevents the
+    default browser action.  Messages are sent with fetch() to the same
+    Flask origin, so the page is never submitted/reloaded by the button.
+    """
+    languages = list_languages()
+    options = ['<option value="">Auto Detect</option>']
+    for item in languages:
+        code = item.get("code", "") if isinstance(item, dict) else ""
+        name = item.get("name", code) if isinstance(item, dict) else code
+        if code:
+            options.append(f'<option value="{code}">{name}</option>')
+    options_html = "\n".join(options)
+
+    return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
-
 <meta charset="UTF-8">
-
-<meta
-    name="viewport"
-    content="width=device-width, initial-scale=1.0"
->
-
-<title>DementiaCareAI — Caregiver Dashboard</title>
-
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DementiaCareAI Voice Test</title>
 <style>
-
-* {
-    box-sizing: border-box;
-}
-
-body {
-    margin: 0;
-    font-family:
-        Inter,
-        system-ui,
-        -apple-system,
-        BlinkMacSystemFont,
-        "Segoe UI",
-        sans-serif;
-    background: #f5f7fb;
-    color: #172033;
-}
-
-button,
-input,
-select,
-textarea {
-    font: inherit;
-}
-
-button {
-    cursor: pointer;
-}
-
-.layout {
-    display: flex;
-    min-height: 100vh;
-}
-
-.sidebar {
-    width: 250px;
-    background: #172033;
-    color: white;
-    padding: 24px 16px;
-    position: fixed;
-    inset: 0 auto 0 0;
-    overflow-y: auto;
-}
-
-.brand {
-    font-size: 22px;
-    font-weight: 800;
-    padding: 8px 12px 26px;
-}
-
-.brand span {
-    display: block;
-    font-size: 12px;
-    font-weight: 500;
-    opacity: .65;
-    margin-top: 5px;
-}
-
-.nav {
-    display: grid;
-    gap: 6px;
-}
-
-.nav button {
-    border: 0;
-    background: transparent;
-    color: rgba(255,255,255,.72);
-    text-align: left;
-    padding: 12px 14px;
-    border-radius: 10px;
-}
-
-.nav button:hover,
-.nav button.active {
-    background: rgba(255,255,255,.1);
-    color: white;
-}
-
-.main {
-    margin-left: 250px;
-    width: calc(100% - 250px);
-    padding: 28px;
-}
-
-.header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 20px;
-    margin-bottom: 24px;
-}
-
-.header h1 {
-    margin: 0;
-    font-size: 28px;
-}
-
-.header p {
-    margin: 5px 0 0;
-    color: #697386;
-}
-
-.refresh {
-    border: 0;
-    border-radius: 10px;
-    padding: 11px 16px;
-    background: #172033;
-    color: white;
-}
-
-.cards {
-    display: grid;
-    grid-template-columns:
-        repeat(4, minmax(0, 1fr));
-    gap: 16px;
-    margin-bottom: 22px;
-}
-
-.card {
-    background: white;
-    border-radius: 16px;
-    padding: 20px;
-    box-shadow:
-        0 5px 20px rgba(20,30,50,.06);
-    border: 1px solid #e8ebf1;
-}
-
-.metric-label {
-    color: #707b8e;
-    font-size: 13px;
-    margin-bottom: 8px;
-}
-
-.metric {
-    font-size: 30px;
-    font-weight: 800;
-}
-
-.grid {
-    display: grid;
-    grid-template-columns:
-        repeat(2, minmax(0, 1fr));
-    gap: 20px;
-}
-
-.panel {
-    background: white;
-    border-radius: 16px;
-    padding: 20px;
-    border: 1px solid #e8ebf1;
-    box-shadow:
-        0 5px 20px rgba(20,30,50,.05);
-}
-
-.panel h2 {
-    margin-top: 0;
-    font-size: 18px;
-}
-
-.table-wrap {
-    overflow-x: auto;
-}
-
-table {
-    width: 100%;
-    border-collapse: collapse;
-}
-
-th,
-td {
-    padding: 11px 8px;
-    border-bottom: 1px solid #edf0f5;
-    text-align: left;
-    font-size: 13px;
-}
-
-th {
-    color: #707b8e;
-    font-weight: 600;
-}
-
-.status {
-    margin-bottom: 18px;
-    padding: 12px 15px;
-    border-radius: 10px;
-    background: #eef4ff;
-    color: #35558a;
-}
-
-.form-grid {
-    display: grid;
-    grid-template-columns:
-        repeat(2, minmax(0, 1fr));
-    gap: 12px;
-}
-
-.field {
-    display: grid;
-    gap: 6px;
-}
-
-.field.full {
-    grid-column: 1 / -1;
-}
-
-.field label {
-    font-size: 13px;
-    font-weight: 600;
-}
-
-.field input,
-.field select,
-.field textarea {
-    width: 100%;
-    border: 1px solid #dce1ea;
-    border-radius: 9px;
-    padding: 10px 12px;
-    background: white;
-}
-
-.field textarea {
-    min-height: 100px;
-    resize: vertical;
-}
-
-.primary {
-    border: 0;
-    border-radius: 9px;
-    padding: 11px 16px;
-    background: #315efb;
-    color: white;
-    font-weight: 700;
-}
-
-.secondary {
-    border: 1px solid #dce1ea;
-    border-radius: 9px;
-    padding: 10px 14px;
-    background: white;
-}
-
-.actions {
-    display: flex;
-    gap: 8px;
-    flex-wrap: wrap;
-    margin-top: 12px;
-}
-
-.image-preview {
-    width: 100%;
-    max-height: 320px;
-    object-fit: contain;
-    border-radius: 12px;
-    background: #f2f4f8;
-    margin-top: 14px;
-}
-
-.answer-box {
-    margin-top: 16px;
-    padding: 15px;
-    border-radius: 12px;
-    background: #f7f8fb;
-}
-
-.result {
-    margin-top: 12px;
-    padding: 13px;
-    border-radius: 10px;
-    background: #edf8f0;
-}
-
-pre {
-    white-space: pre-wrap;
-    word-break: break-word;
-    font-size: 12px;
-    max-height: 420px;
-    overflow: auto;
-}
-
-.view {
-    display: none;
-}
-
-.view.active {
-    display: block;
-}
-
-@media (max-width: 1100px) {
-
-    .cards {
-        grid-template-columns:
-            repeat(2, minmax(0, 1fr));
-    }
-
-    .grid {
-        grid-template-columns: 1fr;
-    }
-}
-
-@media (max-width: 760px) {
-
-    .sidebar {
-        position: static;
-        width: 100%;
-    }
-
-    .layout {
-        display: block;
-    }
-
-    .main {
-        margin-left: 0;
-        width: 100%;
-        padding: 16px;
-    }
-
-    .cards {
-        grid-template-columns: 1fr;
-    }
-
-    .form-grid {
-        grid-template-columns: 1fr;
-    }
-}
-
+body {{ font-family: Arial,sans-serif; max-width:760px; margin:40px auto; padding:20px; }}
+textarea,select {{ width:100%; box-sizing:border-box; font-size:18px; padding:12px; margin-top:10px; }}
+textarea {{ min-height:110px; resize:vertical; }}
+button {{ margin-top:12px; padding:13px 20px; font-size:18px; cursor:pointer; }}
+button:disabled {{ opacity:.6; cursor:not-allowed; }}
+#status,#languageInfo,#response {{ margin-top:15px; padding:12px; border-radius:8px; }}
+#response {{ background:#f3f3f3; min-height:45px; white-space:pre-wrap; }}
+#languageInfo {{ background:#eee; font-size:14px; }}
+.row {{ display:flex; gap:10px; align-items:center; }}
+#mic {{ min-width:150px; }}
 </style>
-
 </head>
-
 <body>
-
-<div class="layout">
-
-<aside class="sidebar">
-
-<div class="brand">
-    DementiaCareAI
-    <span>Caregiver Intelligence</span>
+<h1>🧠 DementiaCareAI</h1>
+<p>Talk naturally with the companion. Type a message or use the microphone.</p>
+<label for="language">Language</label>
+<select id="language">{options_html}</select>
+<textarea id="message" autocomplete="off" placeholder="Type your message here..."></textarea>
+<div class="row">
+<button id="talk" type="button">🔊 Talk to DementiaCareAI</button>
+<button id="mic" type="button">🎤 Voice Input</button>
 </div>
-
-<div class="nav">
-
-<button
-    class="active"
-    data-view="dashboard"
->
-    Dashboard
-</button>
-
-<button data-view="performance">
-    Patient Performance
-</button>
-
-<button data-view="interactions">
-    Interactions
-</button>
-
-<button data-view="memories">
-    Memories & Images
-</button>
-
-<button data-view="recognition">
-    Recognition Activity
-</button>
-
-<button data-view="reminders">
-    Reminders
-</button>
-
-<button data-view="companion">
-    Companion
-</button>
-
-<button data-view="recommendations">
-    Recommendations
-</button>
-
-<button data-view="report">
-    Reports
-</button>
-
-<button data-view="system">
-    System Status
-</button>
-
-</div>
-
-</aside>
-
-<main class="main">
-
-<div class="header">
-
-<div>
-    <h1 id="pageTitle">
-        Caregiver Dashboard
-    </h1>
-
-    <p>
-        Monitor patient engagement,
-        memory activities and companion interactions.
-    </p>
-</div>
-
-<button
-    class="refresh"
-    onclick="loadEverything()"
->
-    Refresh
-</button>
-
-</div>
-
-<div
-    id="status"
-    class="status"
->
-    Loading caregiver data...
-</div>
-
-<section
-    id="dashboard"
-    class="view active"
->
-
-<div class="cards">
-
-<div class="card">
-    <div class="metric-label">
-        Total Interactions
-    </div>
-    <div
-        id="metricInteractions"
-        class="metric"
-    >—</div>
-</div>
-
-<div class="card">
-    <div class="metric-label">
-        Correct Interactions
-    </div>
-    <div
-        id="metricCorrect"
-        class="metric"
-    >—</div>
-</div>
-
-<div class="card">
-    <div class="metric-label">
-        Images Uploaded
-    </div>
-    <div
-        id="metricImages"
-        class="metric"
-    >—</div>
-</div>
-
-<div class="card">
-    <div class="metric-label">
-        Current Mood
-    </div>
-    <div
-        id="metricMood"
-        class="metric"
-    >—</div>
-</div>
-
-</div>
-
-<div class="grid">
-
-<div class="panel">
-
-<h2>Overview</h2>
-
-<pre id="overviewOutput">
-Loading...
-</pre>
-
-</div>
-
-<div class="panel">
-
-<h2>Today's Activity</h2>
-
-<pre id="todayOutput">
-Loading...
-</pre>
-
-</div>
-
-</div>
-
-</section>
-
-
-<section
-    id="performance"
-    class="view"
->
-
-<div class="panel">
-
-<h2>Patient Performance</h2>
-
-<pre id="performanceOutput">
-Loading...
-</pre>
-
-</div>
-
-</section>
-
-
-<section
-    id="interactions"
-    class="view"
->
-
-<div class="panel">
-
-<h2>Conversation & Interaction History</h2>
-
-<pre id="conversationOutput">
-Loading...
-</pre>
-
-</div>
-
-</section>
-
-
-<section
-    id="memories"
-    class="view"
->
-
-<div class="grid">
-
-<div class="panel">
-
-<h2>Patient Memories</h2>
-
-<div
-    id="memoryList"
->
-Loading...
-</div>
-
-</div>
-
-<div class="panel">
-
-<h2>Upload Patient Image</h2>
-
-<div class="field">
-
-<label>
-Memory
-</label>
-
-<select
-    id="memorySelect"
->
-<option value="">
-Loading memories...
-</option>
-</select>
-
-</div>
-
-<div class="field">
-
-<label>
-Image
-</label>
-
-<input
-    id="imageFile"
-    type="file"
-    accept="image/jpeg,image/png,image/webp"
->
-
-</div>
-
-<div class="field">
-
-<label>
-Caption
-</label>
-
-<input
-    id="imageCaption"
-    type="text"
-    placeholder="Example: Family photo"
->
-
-</div>
-
-<div class="actions">
-
-<button
-    class="primary"
-    onclick="uploadImage()"
->
-Upload Image
-</button>
-
-</div>
-
-<div id="uploadResult"></div>
-
-</div>
-
-</div>
-
-</section>
-
-
-<section
-    id="recognition"
-    class="view"
->
-
-<div class="grid">
-
-<div class="panel">
-
-<h2>Recognition / Memory Activity</h2>
-
-<div class="field">
-
-<label>
-Patient Memory
-</label>
-
-<select
-    id="activityMemorySelect"
->
-<option value="">
-Select memory
-</option>
-</select>
-
-</div>
-
-<div class="actions">
-
-<button
-    class="primary"
-    onclick="createActivity()"
->
-Start Activity
-</button>
-
-</div>
-
-<div
-    id="activityQuestion"
-    class="answer-box"
->
-No activity started.
-</div>
-
-</div>
-
-<div class="panel">
-
-<h2>Patient Answer</h2>
-
-<div class="field">
-
-<label>
-Answer
-</label>
-
-<textarea
-    id="patientAnswer"
-    placeholder="Enter the patient's answer here..."
-></textarea>
-
-</div>
-
-<div class="actions">
-
-<button
-    class="primary"
-    onclick="evaluateActivity()"
->
-Evaluate Answer
-</button>
-
-</div>
-
-<div id="evaluationResult"></div>
-
-</div>
-
-</div>
-
-</section>
-
-
-<section
-    id="reminders"
-    class="view"
->
-
-<div class="panel">
-
-<h2>Reminders</h2>
-
-<pre id="remindersOutput">
-Loading...
-</pre>
-
-</div>
-
-</section>
-
-
-<section
-    id="companion"
-    class="view"
->
-
-<div class="panel">
-
-<h2>Companion State</h2>
-
-<pre id="companionOutput">
-Loading...
-</pre>
-
-</div>
-
-</section>
-
-
-<section
-    id="recommendations"
-    class="view"
->
-
-<div class="panel">
-
-<h2>Caregiver Recommendations</h2>
-
-<pre id="recommendationsOutput">
-Loading...
-</pre>
-
-</div>
-
-</section>
-
-
-<section
-    id="report"
-    class="view"
->
-
-<div class="panel">
-
-<h2>Caregiver Report</h2>
-
-<pre id="reportOutput">
-Loading...
-</pre>
-
-</div>
-
-</section>
-
-
-<section
-    id="system"
-    class="view"
->
-
-<div class="grid">
-
-<div class="panel">
-
-<h2>Backend Status</h2>
-
-<pre id="systemOutput">
-Loading...
-</pre>
-
-</div>
-
-<div class="panel">
-
-<h2>Database Status</h2>
-
-<pre id="databaseOutput">
-Loading...
-</pre>
-
-</div>
-
-</div>
-
-</section>
-
-</main>
-
-</div>
-
-
+<div id="status" role="status"></div>
+<div id="languageInfo"></div>
+<div id="response"></div>
 <script>
-
-const statusBox =
-    document.getElementById("status");
-
-const pageTitle =
-    document.getElementById("pageTitle");
-
-
-function setStatus(
-    message
-) {
-    statusBox.textContent =
-        message;
-}
-
-
-async function api(
-    url,
-    options = {}
-) {
-
-    const response =
-        await fetch(
-            url,
-            options
-        );
-
-    let data = null;
-
-    try {
-        data =
-            await response.json();
-    } catch (_) {
-        data = {};
-    }
-
-    if (!response.ok) {
-
-        throw new Error(
-            data.error ||
-            data.message ||
-            `Request failed: ${response.status}`
-        );
-    }
-
-    return data;
-}
-
-
-function pretty(
-    value
-) {
-
-    return JSON.stringify(
-        value,
-        null,
-        2
-    );
-}
-
-
-function findNumber(
-    object,
-    keys
-) {
-
-    if (
-        object === null ||
-        object === undefined
-    ) {
-        return null;
-    }
-
-    if (
-        typeof object !== "object"
-    ) {
-        return null;
-    }
-
-    for (
-        const key of keys
-    ) {
-
-        if (
-            typeof object[key] ===
-            "number"
-        ) {
-            return object[key];
-        }
-    }
-
-    for (
-        const value of Object.values(
-            object
-        )
-    ) {
-
-        if (
-            value &&
-            typeof value === "object"
-        ) {
-
-            const result =
-                findNumber(
-                    value,
-                    keys
-                );
-
-            if (
-                result !== null
-            ) {
-                return result;
-            }
-        }
-    }
-
-    return null;
-}
-
-
-function findArray(
-    object,
-    keys
-) {
-
-    if (
-        !object ||
-        typeof object !== "object"
-    ) {
-        return null;
-    }
-
-    for (
-        const key of keys
-    ) {
-
-        if (
-            Array.isArray(
-                object[key]
-            )
-        ) {
-            return object[key];
-        }
-    }
-
-    for (
-        const value of Object.values(
-            object
-        )
-    ) {
-
-        if (
-            value &&
-            typeof value === "object"
-        ) {
-
-            const result =
-                findArray(
-                    value,
-                    keys
-                );
-
-            if (
-                result
-            ) {
-                return result;
-            }
-        }
-    }
-
-    return null;
-}
-
-
-async function loadOverview() {
-
-    const data =
-        await api(
-            "/api/caregiver/overview"
-        );
-
-    document.getElementById(
-        "overviewOutput"
-    ).textContent =
-        pretty(data);
-
-    const total =
-        findNumber(
-            data,
-            [
-                "total_interactions",
-                "totalInteractions",
-                "interactions",
-                "total"
-            ]
-        );
-
-    if (
-        total !== null
-    ) {
-        document.getElementById(
-            "metricInteractions"
-        ).textContent =
-            total;
-    }
-}
-
-
-async function loadToday() {
-
-    const data =
-        await api(
-            "/api/caregiver/today"
-        );
-
-    document.getElementById(
-        "todayOutput"
-    ).textContent =
-        pretty(data);
-}
-
-
-async function loadPerformance() {
-
-    const [
-        cognitive,
-        activity
-    ] =
-        await Promise.all([
-            api(
-                "/api/caregiver/cognitive"
-            ),
-            api(
-                "/api/caregiver/activity"
-            )
-        ]);
-
-    document.getElementById(
-        "performanceOutput"
-    ).textContent =
-        pretty({
-            cognitive,
-            activity
-        });
-
-    const correct =
-        findNumber(
-            cognitive,
-            [
-                "correct_interactions",
-                "correctInteractions",
-                "correct_answers",
-                "correctAnswers",
-                "correct"
-            ]
-        );
-
-    if (
-        correct !== null
-    ) {
-
-        document.getElementById(
-            "metricCorrect"
-        ).textContent =
-            correct;
-    }
-}
-
-
-async function loadConversation() {
-
-    const data =
-        await api(
-            "/api/caregiver/conversation"
-        );
-
-    document.getElementById(
-        "conversationOutput"
-    ).textContent =
-        pretty(data);
-}
-
-
-async function loadMemories() {
-
-    const data =
-        await api(
-            "/api/caregiver/memory"
-        );
-
-    document.getElementById(
-        "memoryList"
-    ).innerHTML =
-        `<pre>${pretty(data)}</pre>`;
-
-    const memories =
-        await api(
-            "/api/memories"
-        );
-
-    const list =
-        Array.isArray(
-            memories.memories
-        )
-            ? memories.memories
-            : [];
-
-    const selects = [
-        document.getElementById(
-            "memorySelect"
-        ),
-        document.getElementById(
-            "activityMemorySelect"
-        )
-    ];
-
-    for (
-        const select of selects
-    ) {
-
-        select.innerHTML =
-            `<option value="">
-                Select memory
-            </option>`;
-
-        for (
-            const memory of list
-        ) {
-
-            const option =
-                document.createElement(
-                    "option"
-                );
-
-            option.value =
-                memory.id ??
-                memory.memory_id ??
-                "";
-
-            option.textContent =
-                memory.name ||
-                memory.title ||
-                memory.description ||
-                "Memory";
-
-            if (
-                option.value
-            ) {
-                select.appendChild(
-                    option
-                );
-            }
-        }
-    }
-
-    let imageCount =
-        findNumber(
-            data,
-            [
-                "images_uploaded",
-                "image_count",
-                "images",
-                "photo_count"
-            ]
-        );
-
-    if (
-        imageCount === null
-    ) {
-
-        imageCount =
-            findArray(
-                data,
-                [
-                    "media",
-                    "images",
-                    "photos"
-                ]
-            );
-
-        if (
-            Array.isArray(
-                imageCount
-            )
-        ) {
-            imageCount =
-                imageCount.length;
-        }
-    }
-
-    if (
-        typeof imageCount === "number"
-    ) {
-
-        document.getElementById(
-            "metricImages"
-        ).textContent =
-            imageCount;
-    }
-}
-
-
-async function loadReminders() {
-
-    const data =
-        await api(
-            "/api/caregiver/reminders"
-        );
-
-    document.getElementById(
-        "remindersOutput"
-    ).textContent =
-        pretty(data);
-}
-
-
-async function loadCompanion() {
-
-    const data =
-        await api(
-            "/api/caregiver/companion"
-        );
-
-    document.getElementById(
-        "companionOutput"
-    ).textContent =
-        pretty(data);
-
-    const mood =
-        data.current_mood ||
-        data.mood ||
-        data.state?.current_mood;
-
-    if (
-        mood
-    ) {
-
-        document.getElementById(
-            "metricMood"
-        ).textContent =
-            mood;
-    }
-}
-
-
-async function loadRecommendations() {
-
-    const data =
-        await api(
-            "/api/caregiver/recommendations"
-        );
-
-    document.getElementById(
-        "recommendationsOutput"
-    ).textContent =
-        pretty(data);
-}
-
-
-async function loadReport() {
-
-    const data =
-        await api(
-            "/api/caregiver/report"
-        );
-
-    document.getElementById(
-        "reportOutput"
-    ).textContent =
-        pretty(data);
-}
-
-
-async function loadSystem() {
-
-    const [
-        status,
-        database
-    ] =
-        await Promise.all([
-            api(
-                "/api/status"
-            ),
-            api(
-                "/api/database/status"
-            )
-        ]);
-
-    document.getElementById(
-        "systemOutput"
-    ).textContent =
-        pretty(status);
-
-    document.getElementById(
-        "databaseOutput"
-    ).textContent =
-        pretty(database);
-}
-
-
-async function uploadImage() {
-
-    const memoryId =
-        document.getElementById(
-            "memorySelect"
-        ).value;
-
-    const file =
-        document.getElementById(
-            "imageFile"
-        ).files[0];
-
-    const caption =
-        document.getElementById(
-            "imageCaption"
-        ).value;
-
-    if (
-        !memoryId
-    ) {
-
-        alert(
-            "Select a memory first."
-        );
-
-        return;
-    }
-
-    if (
-        !file
-    ) {
-
-        alert(
-            "Select an image first."
-        );
-
-        return;
-    }
-
-    const form =
-        new FormData();
-
-    form.append(
-        "file",
-        file
-    );
-
-    form.append(
-        "media_type",
-        "photo"
-    );
-
-    form.append(
-        "caption",
-        caption
-    );
-
-    try {
-
-        setStatus(
-            "Uploading patient image..."
-        );
-
-        const result =
-            await api(
-                `/api/memories/${encodeURIComponent(memoryId)}/media`,
-                {
-                    method: "POST",
-                    body: form
-                }
-            );
-
-        document.getElementById(
-            "uploadResult"
-        ).innerHTML =
-            `<div class="result">
-                Image uploaded successfully.
-                <pre>${pretty(result)}</pre>
-            </div>`;
-
-        setStatus(
-            "Patient image uploaded successfully."
-        );
-
-        await loadMemories();
-
-    } catch (
-        error
-    ) {
-
-        setStatus(
-            error.message
-        );
-    }
-}
-
-
-let currentActivity =
-    null;
-
-
-async function createActivity() {
-
-    const memoryId =
-        document.getElementById(
-            "activityMemorySelect"
-        ).value;
-
-    if (
-        !memoryId
-    ) {
-
-        alert(
-            "Select a memory first."
-        );
-
-        return;
-    }
-
-    try {
-
-        setStatus(
-            "Creating patient activity..."
-        );
-
-        const result =
-            await api(
-                `/api/activity/create?memory_id=${encodeURIComponent(memoryId)}`
-            );
-
-        currentActivity =
-            result.activity;
-
-        document.getElementById(
-            "activityQuestion"
-        ).textContent =
-            currentActivity?.question ||
-            currentActivity?.prompt ||
-            currentActivity?.title ||
-            "Activity created. See activity data below.";
-
-        setStatus(
-            "Recognition / memory activity ready."
-        );
-
-    } catch (
-        error
-    ) {
-
-        setStatus(
-            error.message
-        );
-    }
-}
-
-
-async function evaluateActivity() {
-
-    if (
-        !currentActivity
-    ) {
-
-        alert(
-            "Start an activity first."
-        );
-
-        return;
-    }
-
-    const answer =
-        document.getElementById(
-            "patientAnswer"
-        ).value.trim();
-
-    if (
-        !answer
-    ) {
-
-        alert(
-            "Enter the patient's answer."
-        );
-
-        return;
-    }
-
-    try {
-
-        setStatus(
-            "Evaluating patient response..."
-        );
-
-        const result =
-            await api(
-                "/api/memory-activity/evaluate",
-                {
-                    method: "POST",
-
-                    headers: {
-                        "Content-Type":
-                            "application/json"
-                    },
-
-                    body: JSON.stringify({
-                        activity:
-                            currentActivity,
-
-                        answer:
-                            answer
-                    })
-                }
-            );
-
-        document.getElementById(
-            "evaluationResult"
-        ).innerHTML =
-            `<div class="result">
-                <strong>Patient response recorded.</strong>
-                <pre>${pretty(result)}</pre>
-            </div>`;
-
-        setStatus(
-            "Patient response evaluated and recorded."
-        );
-
-        await loadPerformance();
-
-    } catch (
-        error
-    ) {
-
-        setStatus(
-            error.message
-        );
-    }
-}
-
-
-async function loadEverything() {
-
-    setStatus(
-        "Loading caregiver dashboard..."
-    );
-
-    try {
-
-        await Promise.all([
-            loadOverview(),
-            loadToday(),
-            loadPerformance(),
-            loadConversation(),
-            loadMemories(),
-            loadReminders(),
-            loadCompanion(),
-            loadRecommendations(),
-            loadReport(),
-            loadSystem()
-        ]);
-
-        setStatus(
-            "Caregiver dashboard is connected."
-        );
-
-    } catch (
-        error
-    ) {
-
-        console.error(
-            error
-        );
-
-        setStatus(
-            "Dashboard connection error: "
-            + error.message
-        );
-    }
-}
-
-
-document.querySelectorAll(
-    ".nav button"
-).forEach(
-    button => {
-
-        button.addEventListener(
-            "click",
-            () => {
-
-                document.querySelectorAll(
-                    ".nav button"
-                ).forEach(
-                    item =>
-                        item.classList.remove(
-                            "active"
-                        )
-                );
-
-                button.classList.add(
-                    "active"
-                );
-
-                document.querySelectorAll(
-                    ".view"
-                ).forEach(
-                    view =>
-                        view.classList.remove(
-                            "active"
-                        )
-                );
-
-                const id =
-                    button.dataset.view;
-
-                const target =
-                    document.getElementById(
-                        id
-                    );
-
-                if (
-                    target
-                ) {
-                    target.classList.add(
-                        "active"
-                    );
-                }
-
-                pageTitle.textContent =
-                    button.textContent.trim();
-            }
-        );
-
-    }
-);
-
-
-loadEverything();
-
+(() => {{
+  const message = document.getElementById('message');
+  const language = document.getElementById('language');
+  const talk = document.getElementById('talk');
+  const mic = document.getElementById('mic');
+  const status = document.getElementById('status');
+  const languageInfo = document.getElementById('languageInfo');
+  const responseBox = document.getElementById('response');
+  let busy = false;
+
+  const locales = {{
+    en:'en-IN', hi:'hi-IN', hinglish:'hi-IN', as:'as-IN', bn:'bn-IN', mr:'mr-IN',
+    ur:'ur-IN', pa:'pa-IN', gu:'gu-IN', or:'or-IN', ta:'ta-IN', te:'te-IN',
+    kn:'kn-IN', ml:'ml-IN', ne:'ne-IN', mni:'mni-IN', brx:'brx-IN', kha:'kha-IN',
+    grt:'grt-IN', lus:'lus-IN', trp:'trp-IN'
+  }};
+
+  function speechLocale(data) {{
+    return (data && data.language_info && data.language_info.speech_locale) ||
+           locales[(data && (data.language || data.detected_language)) || 'en'] || 'en-IN';
+  }}
+
+  function speak(text, locale) {{
+    if (!text || !('speechSynthesis' in window)) return Promise.resolve(false);
+    return new Promise(resolve => {{
+      window.speechSynthesis.cancel();
+      const u = new SpeechSynthesisUtterance(text);
+      u.lang = locale;
+      u.rate = 0.88; u.pitch = 1; u.volume = 1;
+      u.onend = () => {{ status.textContent = 'DementiaCareAI finished speaking.'; resolve(true); }};
+      u.onerror = e => {{ status.textContent = 'Text response is ready, but browser speech failed: ' + (e.error || 'unknown error'); resolve(false); }};
+      // Some browsers need speechSynthesis to be called directly from the user gesture.
+      window.speechSynthesis.speak(u);
+      setTimeout(() => {{ if (window.speechSynthesis.paused) window.speechSynthesis.resume(); }}, 100);
+    }});
+  }}
+
+  async function sendMessage(event) {{
+    if (event) event.preventDefault();
+    if (busy) return;
+    const text = message.value.trim();
+    if (!text) {{ status.textContent = 'Please type something first.'; message.focus(); return; }}
+
+    busy = true; talk.disabled = true;
+    status.textContent = 'DementiaCareAI is thinking...';
+    // IMPORTANT: do not clear the input. This prevents the user thinking the page reloaded.
+    try {{
+      const body = {{ message: text, session_id: 'voice-demo' }};
+      if (language.value) body.language = language.value;
+
+      const result = await fetch('/api/chat', {{
+        method:'POST', headers:{{'Content-Type':'application/json'}},
+        body:JSON.stringify(body), credentials:'same-origin', cache:'no-store'
+      }});
+      const raw = await result.text();
+      let data;
+      try {{ data = JSON.parse(raw); }} catch {{ throw new Error('Server returned non-JSON response (' + result.status + ').'); }}
+      if (!result.ok || data.success === false) throw new Error(data.error || data.message || 'Chat failed');
+
+      const answer = String(data.response || data.message || '').trim();
+      if (!answer) throw new Error('The AI returned an empty response.');
+      responseBox.textContent = answer;
+      const selected = data.language || 'en';
+      const detected = data.detected_language || selected;
+      const confidence = data.language_confidence;
+      languageInfo.textContent = 'Response language: ' + selected + ' | Detected: ' + detected +
+        (confidence !== undefined ? ' | Confidence: ' + confidence : '');
+      status.textContent = 'DementiaCareAI is speaking...';
+      await speak(answer, speechLocale(data));
+    }} catch (error) {{
+      console.error('DementiaCareAI chat error:', error);
+      status.textContent = 'Error: ' + error.message;
+    }} finally {{
+      busy = false; talk.disabled = false; message.focus();
+    }}
+  }}
+
+  // The button is type=button, but preventDefault is kept as a defensive guard.
+  talk.addEventListener('click', sendMessage);
+  message.addEventListener('keydown', e => {{
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') sendMessage(e);
+  }});
+
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SpeechRecognition) {{
+    mic.disabled = true; mic.title = 'Speech recognition is not supported in this browser.';
+  }} else {{
+    const recognition = new SpeechRecognition();
+    recognition.interimResults = false; recognition.continuous = false;
+    mic.addEventListener('click', () => {{
+      recognition.lang = locales[language.value || 'en'] || 'en-IN';
+      status.textContent = 'Listening...'; mic.disabled = true;
+      try {{ recognition.start(); }} catch (e) {{ mic.disabled = false; status.textContent = 'Microphone could not start.'; }}
+    }});
+    recognition.onresult = e => {{
+      const transcript = e.results[0][0].transcript || '';
+      message.value = transcript;
+      status.textContent = 'Voice captured. Press Talk to DementiaCareAI.';
+      message.focus();
+    }};
+    recognition.onerror = e => {{ status.textContent = 'Voice input error: ' + e.error; }};
+    recognition.onend = () => {{ mic.disabled = false; }};
+  }}
+}})();
 </script>
-
 </body>
-</html>
-"""
+</html>"""
 
 
 # ============================================================
@@ -6297,8 +4078,13 @@ if __name__ == "__main__":
 
     print()
 
+    # Hackathon/demo mode: disable Flask's debug auto-reloader.
+    # The reloader can restart the process when project files change
+    # (including OneDrive/Git/VS Code file updates), which can make
+    # the browser appear to refresh unexpectedly.
     app.run(
         host="127.0.0.1",
         port=5000,
-        debug=True,
+        debug=False,
+        use_reloader=False,
     )

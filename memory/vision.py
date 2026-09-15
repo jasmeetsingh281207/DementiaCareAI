@@ -1,11 +1,9 @@
 import json
-import os
 import mimetypes
 from datetime import datetime
 from pathlib import Path
 
-from dotenv import load_dotenv
-from google import genai
+from ai.gemini_service import generate, status as gemini_status
 
 from database import execute, fetch_one, fetch_all
 from memory.memory_store import (
@@ -13,17 +11,6 @@ from memory.memory_store import (
     get_memory_media_by_id,
 )
 
-load_dotenv()
-
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-
-if not GEMINI_API_KEY:
-    raise RuntimeError("GEMINI_API_KEY is missing from .env")
-
-client = genai.Client(api_key=GEMINI_API_KEY)
-
-# Keep the same working model already used by your project.
-MODEL_NAME = "gemini-3.6-flash"
 
 
 def initialize_vision_database():
@@ -293,40 +280,20 @@ def analyze_media(media_id, memory_id=None, force=False):
     mime_type = _get_mime_type(media)
     media_kind = _get_media_kind(media)
 
-    # Upload the local photo/video to Gemini Files API.
-    uploaded_file = client.files.upload(
-        file=str(path)
-    )
-
     prompt = _build_analysis_prompt(
         memory=memory,
         media=media
     )
 
-    interaction = client.interactions.create(
-        model=MODEL_NAME,
-        input=[
-            {
-                "type": "text",
-                "text": prompt
-            },
-            {
-                "type": media_kind,
-                "uri": uploaded_file.uri,
-                "mime_type": mime_type
-            }
-        ]
-    )
-
-    response_text = getattr(
-        interaction,
-        "output_text",
-        None
-    )
-
+    # ``Part.from_bytes`` avoids a Files API dependency and is compatible
+    # with the same generate_content API used by conversation and activities.
+    try:
+        from google.genai import types
+        response_text = generate(prompt, contents=[prompt, types.Part.from_bytes(data=path.read_bytes(), mime_type=mime_type)])
+    except Exception:
+        response_text = None
     if not response_text:
-        # Compatibility fallback for response structures.
-        response_text = str(interaction)
+        raise RuntimeError("Vision analysis is unavailable; configure a usable Gemini service and try again.")
 
     analysis = _parse_json_response(response_text)
 

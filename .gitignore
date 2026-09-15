@@ -94,3 +94,5 @@ generated_media/
 *.sqlite
 *.sqlite3
 *.db
+data/*.json
+memory/storage/*/

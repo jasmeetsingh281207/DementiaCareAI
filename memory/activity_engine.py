@@ -3,9 +3,7 @@ import json
 import uuid
 
 
-from google import genai
-from dotenv import load_dotenv
-import os
+from ai.gemini_service import get_client, generate
 
 
 from memory.memory_store import (
@@ -26,6 +24,7 @@ from companion.state import (
 from cognitive.tracker import (
     record_performance
 )
+from database import execute
 
 
 
@@ -34,28 +33,9 @@ from cognitive.tracker import (
 # =========================================================
 
 
-load_dotenv()
-
-
-API_KEY = os.getenv(
-    "GEMINI_API_KEY"
-)
-
-
-MODEL_NAME = os.getenv(
-    "MODEL_NAME",
-    "gemini-3.6-flash"
-)
-
-
-client = None
-
-
-if API_KEY:
-
-    client = genai.Client(
-        api_key=API_KEY
-    )
+def get_gemini_client():
+    """Compatibility alias for the canonical lazy Gemini client."""
+    return get_client()
 
 
 
@@ -312,7 +292,9 @@ def generate_question(
 ):
 
 
-    if not client:
+    gemini_client = get_gemini_client()
+
+    if not gemini_client:
 
         return None
 
@@ -350,19 +332,7 @@ Return only the question.
 
     try:
 
-        response = client.interactions.create(
-
-            model=MODEL_NAME,
-
-            input=prompt
-
-        )
-
-
-        return (
-            response.output_text
-            .strip()
-        )
+        return generate(prompt)
 
 
     except Exception as error:
@@ -558,6 +528,15 @@ def create_activity(
         activity
     )
 
+    # Persist activities as well as companion state so caregiver analytics
+    # and restart-safe completion tracking use real records.
+    execute("""INSERT OR REPLACE INTO activities
+        (id, activity_type, memory_id, question, result, created_at, completed_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)""", (
+        activity["id"], activity["type"], activity["memory_id"], activity["question"],
+        None, activity["created_at"], None,
+    ))
+
 
     return activity
 
@@ -658,7 +637,9 @@ def evaluate_with_gemini(
 ):
 
 
-    if not client:
+    gemini_client = get_gemini_client()
+
+    if not gemini_client:
 
         return None
 
@@ -709,20 +690,8 @@ needs_help
     try:
 
 
-        response = client.interactions.create(
-
-            model=MODEL_NAME,
-
-            input=prompt
-
-        )
-
-
-        return safe_json_parse(
-
-            response.output_text
-
-        )
+        response_text = generate(prompt)
+        return safe_json_parse(response_text) if response_text else None
 
 
     except Exception:
@@ -880,6 +849,10 @@ def evaluate_answer(
         completed,
         response
     )
+
+    execute("""UPDATE activities SET result = ?, completed_at = ? WHERE id = ?""", (
+        result, completed["completed_at"], activity.get("id"),
+    ))
 
 
     return response

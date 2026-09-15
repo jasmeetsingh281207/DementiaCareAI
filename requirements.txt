@@ -1,0 +1,5 @@
+Flask>=3.0,<4
+google-genai>=1.0
+python-dotenv>=1.0
+gTTS>=2.5
+Werkzeug>=3.0

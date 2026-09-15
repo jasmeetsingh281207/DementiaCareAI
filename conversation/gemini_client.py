@@ -27,6 +27,7 @@ from typing import Any
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
+from ai.gemini_service import get_client as _canonical_gemini_client, model_name as _canonical_model_name
 
 try:
     from language import (
@@ -53,7 +54,7 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 # Keep the known-working project model.
 GEMINI_MODEL = os.getenv(
     "GEMINI_MODEL",
-    "gemini-3.6-flash",
+    _canonical_model_name(),
 )
 
 # Do not repeatedly hit a known-exhausted Gemini quota.
@@ -674,21 +675,7 @@ def get_gemini_client():
     Lazily create the Gemini client.
     """
 
-    global _client
-
-    if _client is not None:
-        return _client
-
-    if not GEMINI_API_KEY:
-        raise RuntimeError(
-            "GEMINI_API_KEY is not configured."
-        )
-
-    _client = genai.Client(
-        api_key=GEMINI_API_KEY
-    )
-
-    return _client
+    return _canonical_gemini_client()
 
 
 # ============================================================

@@ -4,6 +4,7 @@ from datetime import datetime
 
 from dotenv import load_dotenv
 from google import genai
+from ai.gemini_service import get_client as _canonical_gemini_client, model_name as _canonical_model_name
 
 from database import (
     get_conversation_history,
@@ -41,23 +42,14 @@ api_key = os.getenv(
     "GEMINI_API_KEY"
 )
 
-if not api_key:
-
-    raise ValueError(
-        "GEMINI_API_KEY is not set in the .env file."
-    )
-
-
 # =========================================================
 # GEMINI CLIENT
 # =========================================================
 
-client = genai.Client(
-    api_key=api_key
-)
+client = None  # legacy module; initialize only when its compatibility entrypoint is invoked
 
 
-MODEL_NAME = "gemini-3.6-flash"
+MODEL_NAME = _canonical_model_name()
 
 
 # =========================================================
@@ -629,6 +621,13 @@ def ask_gemini(message):
         raise ValueError(
             "Message is required."
         )
+
+    # Compatibility entrypoint retained for older callers.  The former
+    # interactions.create tool loop is obsolete; all active generation now
+    # runs through the canonical conversation pipeline.
+    from conversation.conversation_engine import process_message
+    result = process_message(str(message))
+    return result.get("response", "I'm here with you.")
 
 
     # -----------------------------------------------------

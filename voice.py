@@ -169,13 +169,10 @@ def get_voice_status(language: str | None = None) -> dict[str, Any]:
             "note": "Actual recognition support depends on the browser/device.",
         },
         "tts": {
-            "available": bool(gTTS) or True,
+            "available": bool(gTTS),
             "server_provider": "gTTS" if gTTS else None,
             "browser_fallback": True,
-            "note": (
-                "Server TTS is available through gTTS for supported languages; "
-                "browser speechSynthesis is retained as a fallback."
-            ),
+            "note": "Server TTS requires gTTS and network access; browser speechSynthesis is a client-side fallback.",
         },
         "language_count": len(SUPPORTED_VOICE_LANGUAGES),
         "languages": config.get("languages") or [config["language"]],
@@ -304,7 +301,7 @@ def synthesize_speech(text: str, language: str) -> dict[str, Any]:
         return {
             "success": False,
             "error": "server_tts_failed",
-            "detail": str(exc),
+            # Do not expose provider/network implementation details to clients.
             "language": code,
         }
 
