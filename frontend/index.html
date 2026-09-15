@@ -12,6 +12,66 @@
     <title>DementiaCare — AI Companion</title>
 
     <link rel="stylesheet" href="style.css" />
+    <style>
+      .caregiver-modal {
+        max-height: 90vh;
+        overflow-y: auto;
+      }
+      .caregiver-reminders {
+        margin-top: 1.25rem;
+      }
+      .caregiver-section-heading {
+        display: flex;
+        justify-content: space-between;
+        gap: 1rem;
+        align-items: center;
+        margin-bottom: 0.75rem;
+      }
+      .caregiver-section-heading span {
+        opacity: 0.7;
+        font-size: 0.9em;
+      }
+      .caregiver-reminder-list {
+        display: grid;
+        gap: 0.65rem;
+      }
+      .caregiver-reminder {
+        display: flex;
+        justify-content: space-between;
+        gap: 1rem;
+        align-items: center;
+        padding: 0.8rem 0.9rem;
+        border: 1px solid rgba(0, 0, 0, 0.08);
+        border-radius: 0.75rem;
+      }
+      .caregiver-reminder-main {
+        min-width: 0;
+      }
+      .caregiver-reminder-message {
+        font-weight: 600;
+        overflow-wrap: anywhere;
+      }
+      .caregiver-reminder-time {
+        font-size: 0.9em;
+        opacity: 0.7;
+        margin-top: 0.2rem;
+      }
+      .caregiver-reminder-status {
+        flex: 0 0 auto;
+        font-size: 0.82em;
+        font-weight: 600;
+        text-transform: capitalize;
+      }
+      .caregiver-empty {
+        opacity: 0.7;
+        padding: 0.75rem 0;
+      }
+      #caregiverError[hidden],
+      #caregiverContent[hidden],
+      #caregiverLoading[hidden] {
+        display: none;
+      }
+    </style>
   </head>
 
   <body>
@@ -691,49 +751,103 @@
             <span>English</span>
           </button>
 
-          <button
-            class="language-option"
-            data-language="हिन्दी"
-            data-code="hi"
-          >
+          <button class="language-option" data-language="हिन्दी" data-code="hi">
             हिन्दी
             <span>Hindi</span>
           </button>
 
-          <button
-            class="language-option"
-            data-language="ਪੰਜਾਬੀ"
-            data-code="pa"
-          >
+          <button class="language-option" data-language="ਪੰਜਾਬੀ" data-code="pa">
             ਪੰਜਾਬੀ
             <span>Punjabi</span>
           </button>
 
-          <button
-            class="language-option"
-            data-language="বাংলা"
-            data-code="bn"
-          >
+          <button class="language-option" data-language="বাংলা" data-code="bn">
             বাংলা
             <span>Bengali</span>
           </button>
-          <button class="language-option" data-language="Hinglish" data-code="hinglish">Hinglish <span>Hindi + English</span></button>
-          <button class="language-option" data-language="Assamese" data-code="as">Assamese <span>Assamese</span></button>
-          <button class="language-option" data-language="Marathi" data-code="mr">Marathi <span>Marathi</span></button>
-          <button class="language-option" data-language="Urdu" data-code="ur">Urdu <span>Urdu</span></button>
-          <button class="language-option" data-language="Gujarati" data-code="gu">Gujarati <span>Gujarati</span></button>
-          <button class="language-option" data-language="Odia" data-code="or">Odia <span>Odia</span></button>
-          <button class="language-option" data-language="Tamil" data-code="ta">Tamil <span>Tamil</span></button>
-          <button class="language-option" data-language="Telugu" data-code="te">Telugu <span>Telugu</span></button>
-          <button class="language-option" data-language="Kannada" data-code="kn">Kannada <span>Kannada</span></button>
-          <button class="language-option" data-language="Malayalam" data-code="ml">Malayalam <span>Malayalam</span></button>
-          <button class="language-option" data-language="Nepali" data-code="ne">Nepali <span>Nepali</span></button>
-          <button class="language-option" data-language="Manipuri / Meitei" data-code="mni">Manipuri / Meitei <span>Meitei</span></button>
-          <button class="language-option" data-language="Bodo" data-code="brx">Bodo <span>Bodo</span></button>
-          <button class="language-option" data-language="Khasi" data-code="kha">Khasi <span>Khasi</span></button>
-          <button class="language-option" data-language="Garo" data-code="grt">Garo <span>Garo</span></button>
-          <button class="language-option" data-language="Mizo" data-code="lus">Mizo <span>Mizo</span></button>
-          <button class="language-option" data-language="Tripuri / Kokborok" data-code="trp">Tripuri / Kokborok <span>Kokborok</span></button>
+          <button
+            class="language-option"
+            data-language="Hinglish"
+            data-code="hinglish"
+          >
+            Hinglish <span>Hindi + English</span>
+          </button>
+          <button
+            class="language-option"
+            data-language="Assamese"
+            data-code="as"
+          >
+            Assamese <span>Assamese</span>
+          </button>
+          <button
+            class="language-option"
+            data-language="Marathi"
+            data-code="mr"
+          >
+            Marathi <span>Marathi</span>
+          </button>
+          <button class="language-option" data-language="Urdu" data-code="ur">
+            Urdu <span>Urdu</span>
+          </button>
+          <button
+            class="language-option"
+            data-language="Gujarati"
+            data-code="gu"
+          >
+            Gujarati <span>Gujarati</span>
+          </button>
+          <button class="language-option" data-language="Odia" data-code="or">
+            Odia <span>Odia</span>
+          </button>
+          <button class="language-option" data-language="Tamil" data-code="ta">
+            Tamil <span>Tamil</span>
+          </button>
+          <button class="language-option" data-language="Telugu" data-code="te">
+            Telugu <span>Telugu</span>
+          </button>
+          <button
+            class="language-option"
+            data-language="Kannada"
+            data-code="kn"
+          >
+            Kannada <span>Kannada</span>
+          </button>
+          <button
+            class="language-option"
+            data-language="Malayalam"
+            data-code="ml"
+          >
+            Malayalam <span>Malayalam</span>
+          </button>
+          <button class="language-option" data-language="Nepali" data-code="ne">
+            Nepali <span>Nepali</span>
+          </button>
+          <button
+            class="language-option"
+            data-language="Manipuri / Meitei"
+            data-code="mni"
+          >
+            Manipuri / Meitei <span>Meitei</span>
+          </button>
+          <button class="language-option" data-language="Bodo" data-code="brx">
+            Bodo <span>Bodo</span>
+          </button>
+          <button class="language-option" data-language="Khasi" data-code="kha">
+            Khasi <span>Khasi</span>
+          </button>
+          <button class="language-option" data-language="Garo" data-code="grt">
+            Garo <span>Garo</span>
+          </button>
+          <button class="language-option" data-language="Mizo" data-code="lus">
+            Mizo <span>Mizo</span>
+          </button>
+          <button
+            class="language-option"
+            data-language="Tripuri / Kokborok"
+            data-code="trp"
+          >
+            Tripuri / Kokborok <span>Kokborok</span>
+          </button>
         </div>
       </div>
     </div>
@@ -824,39 +938,67 @@
           </button>
         </div>
 
-        <div class="caregiver-grid">
-          <div class="caregiver-stat">
-            <span>Routine</span>
-            <strong>3 / 4</strong>
-            <small>activities completed</small>
-          </div>
-
-          <div class="caregiver-stat">
-            <span>Hydration</span>
-            <strong>Good</strong>
-            <small>last reminder acknowledged</small>
-          </div>
-
-          <div class="caregiver-stat">
-            <span>Memory</span>
-            <strong>Today</strong>
-            <small>activity scheduled at 4 PM</small>
-          </div>
-
-          <div class="caregiver-stat">
-            <span>Companion</span>
-            <strong>Ready</strong>
-            <small>voice assistant available</small>
-          </div>
+        <div id="caregiverLoading" class="caregiver-note">
+          <strong>Loading today's information…</strong>
+          <p>Getting the latest information from DementiaCareAI.</p>
         </div>
 
-        <div class="caregiver-note">
-          <strong>Important</strong>
+        <div id="caregiverError" class="caregiver-note" hidden>
+          <strong>Unable to load caregiver data</strong>
+          <p id="caregiverErrorText">Please try again in a moment.</p>
+          <button id="caregiverRetryButton" type="button">Try again</button>
+        </div>
 
-          <p>
-            This screen is for routine monitoring and caregiver support. It does
-            not replace professional medical assessment.
-          </p>
+        <div id="caregiverContent" hidden>
+          <div class="caregiver-grid">
+            <div class="caregiver-stat">
+              <span>Activities</span
+              ><strong id="caregiverActivitiesValue">0 / 0</strong
+              ><small id="caregiverActivitiesDetail">completed today</small>
+            </div>
+            <div class="caregiver-stat">
+              <span>Reminders</span
+              ><strong id="caregiverRemindersValue">0</strong
+              ><small id="caregiverRemindersDetail">scheduled today</small>
+            </div>
+            <div class="caregiver-stat">
+              <span>Memory</span><strong id="caregiverMemoryValue">0</strong
+              ><small id="caregiverMemoryDetail">memories stored</small>
+            </div>
+            <div class="caregiver-stat">
+              <span>Companion</span
+              ><strong id="caregiverCompanionValue">Active</strong
+              ><small id="caregiverCompanionDetail">conversation status</small>
+            </div>
+            <div class="caregiver-stat">
+              <span>Cognitive</span
+              ><strong id="caregiverCognitiveValue">—</strong
+              ><small id="caregiverCognitiveDetail">average score</small>
+            </div>
+            <div class="caregiver-stat">
+              <span>Today's conversation</span
+              ><strong id="caregiverConversationValue">0</strong
+              ><small id="caregiverConversationDetail">messages</small>
+            </div>
+          </div>
+          <div class="caregiver-reminders">
+            <div class="caregiver-section-heading">
+              <strong>Today's reminders</strong
+              ><span id="caregiverReminderSummary">0 reminders</span>
+            </div>
+            <div id="caregiverReminderList" class="caregiver-reminder-list">
+              <div class="caregiver-empty">
+                No reminders scheduled for today.
+              </div>
+            </div>
+          </div>
+          <div class="caregiver-note">
+            <strong>Important</strong>
+            <p>
+              This screen is for routine monitoring and caregiver support. It
+              does not replace professional medical assessment.
+            </p>
+          </div>
         </div>
       </div>
     </div>
