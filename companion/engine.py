@@ -201,25 +201,6 @@ def _extract_language_info(
     return None
 
 
-def _sanitize_companion_response(response: str) -> str:
-    """Block the known malformed event-as-relationship response."""
-    if not isinstance(response, str):
-        return ""
-    cleaned = " ".join(response.strip().split())
-    lowered = cleaned.casefold()
-    patterns = (
-        "birthday celebration is your family",
-        "birthday celebration is your relative",
-        "birthday celebration is your mother",
-        "birthday celebration is your father",
-        "birthday celebration is your sister",
-        "birthday celebration is your brother",
-    )
-    if any(pattern in lowered for pattern in patterns):
-        return ""
-    return cleaned
-
-
 # =========================================================
 # MAIN COMPANION PROCESSOR
 # =========================================================
@@ -229,6 +210,7 @@ def process_message(
     session_id: str | None = None,
     language: str | dict[str, Any] | None = None,
     language_info: dict[str, Any] | None = None,
+    patient_id: int = 1,
 ) -> dict[str, Any]:
     """
     Process a message through the unified AI conversation
@@ -278,6 +260,7 @@ def process_message(
     conversation_kwargs: dict[str, Any] = {
         "message": message,
         "session_id": session_id,
+        "patient_id": patient_id,
     }
 
     if language is not None:
@@ -296,6 +279,35 @@ def process_message(
             **conversation_kwargs
         )
 
+    except TypeError:
+        """
+        Backward compatibility.
+
+        If an older conversation_engine.py does not yet accept
+        language/language_info, retry using the original API.
+
+        This can be removed once conversation_engine.py has been
+        updated to accept language parameters.
+        """
+
+        try:
+
+            result = process_conversation_message(
+                message=message,
+                session_id=session_id,
+            )
+
+        except Exception as exc:
+
+            return {
+                "success": False,
+                "response": (
+                    "I'm here with you. "
+                    "Let's try that again."
+                ),
+                "error": str(exc),
+            }
+
     except Exception as exc:
 
         return {
@@ -311,9 +323,7 @@ def process_message(
     # Normalize response
     # -----------------------------------------------------
 
-    response = _sanitize_companion_response(
-        _extract_response(result)
-    )
+    response = _extract_response(result)
 
     if not response:
 
@@ -367,6 +377,7 @@ def chat(
     session_id: str | None = None,
     language: str | dict[str, Any] | None = None,
     language_info: dict[str, Any] | None = None,
+    patient_id: int = 1,
 ) -> dict[str, Any]:
 
     return process_message(
@@ -374,6 +385,7 @@ def chat(
         session_id=session_id,
         language=language,
         language_info=language_info,
+        patient_id=patient_id,
     )
 
 

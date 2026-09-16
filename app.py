@@ -5,7 +5,6 @@ from flask import (
     jsonify,
     request,
     send_from_directory,
-    send_file,
 )
 
 # ============================================================
@@ -41,9 +40,7 @@ from voice import (
     browser_voice_instruction,
     process_voice_transcript,
     validate_audio_payload,
-    synthesize_speech,
 )
-from ai.gemini_service import status as get_gemini_status
 
 
 # ============================================================
@@ -83,8 +80,13 @@ from companion.orchestrator import (
 )
 
 from companion.engine import (
-    process_message,
     get_engine_status,
+)
+
+# HTTP conversation requests use the canonical, database-first engine.
+# Keep companion.engine available for its non-conversation status support.
+from conversation.conversation_engine import (
+    process_message,
 )
 
 from companion.state import (
@@ -168,6 +170,7 @@ from cognitive.tracker import (
 # ============================================================
 
 app = Flask(__name__)
+FRONTEND_DIR = Path(__file__).resolve().parent / "frontend"
 
 
 # ============================================================
@@ -430,8 +433,6 @@ def _prepare_language_context(
             "language"
         )
     )
-    if isinstance(detected_code, dict):
-        detected_code = detected_code.get("code") or detected_code.get("language")
 
     if selected_code:
         interaction_code = selected_code
@@ -1614,23 +1615,6 @@ def voice_audio_validate():
         )
 
 
-@app.route("/api/voice/speak", methods=["POST"])
-def voice_speak():
-    """Stream server-generated audio; browser TTS remains the frontend fallback."""
-    data = _json_body()
-    text = _required_text(data, "text")
-    language_code, language_error = _optional_language(data)
-    if not text:
-        return _api_error("text is required.", 400)
-    if language_error:
-        return _api_error(language_error, 400)
-    result = synthesize_speech(text, language_code or "en")
-    if not result.get("success"):
-        return jsonify(result), 503
-    from io import BytesIO
-    return send_file(BytesIO(result["audio"]), mimetype=result["content_type"], as_attachment=False, download_name="speech.mp3")
-
-
 # ============================================================
 # API INFORMATION
 # ============================================================
@@ -1785,57 +1769,17 @@ def api_information():
     methods=["GET"],
 )
 def home():
-    frontend_dir = Path(__file__).resolve().parent / "frontend"
-    return send_from_directory(
-        str(frontend_dir),
-        "index.html",
-    )
+    return send_from_directory(FRONTEND_DIR, "index.html")
+
+
 @app.route("/style.css", methods=["GET"])
 def frontend_style():
-    return send_from_directory(Path(__file__).resolve().parent / "frontend", "style.css")
+    return send_from_directory(FRONTEND_DIR, "style.css")
+
 
 @app.route("/script.js", methods=["GET"])
 def frontend_script():
-    return send_from_directory(Path(__file__).resolve().parent / "frontend", "script.js")
-
-@app.route("/api/info", methods=["GET"])
-def home_api_info():
-    return jsonify({
-        "name": "DementiaCareAI",
-        "status": "running",
-        "version": "3.2",
-        "service": "DementiaCareAI Backend",
-        "api": "/api",
-        "health": "/api/health",
-
-        "features": [
-            "AI conversation",
-            "multilingual conversation",
-            "automatic local language detection",
-            "Indian language support",
-            "Northeast Indian language support",
-            "Hinglish support",
-            "unified companion conversation",
-            "persistent memory",
-            "conversation history",
-            "smart reminders",
-            "memory recall activities",
-            "photo memory",
-            "video memory",
-            "Gemini visual memory analysis",
-            "AI memory questions",
-            "AI memory answer evaluation",
-            "cognitive tracking",
-            "daily companion",
-            "daily routine",
-            "companion orchestration",
-            "caregiver intelligence",
-            "caregiver recommendations",
-            "caregiver reports",
-            "voice interaction",
-            "browser speech support",
-        ],
-    })
+    return send_from_directory(FRONTEND_DIR, "script.js")
 
 
 # ============================================================
@@ -1884,7 +1828,20 @@ def health_check():
                 "status": voice_info,
             },
 
-            "gemini": get_gemini_status(),
+            "gemini": (
+                engine_status.get(
+                    "gemini",
+                    engine_status.get(
+                        "gemini_available",
+                        "fallback",
+                    ),
+                )
+                if isinstance(
+                    engine_status,
+                    dict,
+                )
+                else "fallback"
+            ),
 
             "companion_engine": engine_status,
 
@@ -1955,7 +1912,7 @@ def api_status():
 
             "local_language_detection": True,
 
-            "gemini": get_gemini_status(),
+            "gemini": True,
 
             "language_status": language_info,
             "voice_status": voice_info,
@@ -2085,7 +2042,7 @@ def chat():
     """
     Main general conversation endpoint.
 
-    Uses the same Companion Engine pipeline as
+    Uses the canonical conversation engine pipeline, shared with
     /api/companion/message.
 
     Language behavior:
@@ -2163,13 +2120,7 @@ def chat():
         )
 
         # ----------------------------------------------------
-        # Unified companion engine.
-        #
-        # IMPORTANT:
-        # No TypeError retry is used here.
-        #
-        # The updated companion.engine.process_message()
-        # accepts language and language_info explicitly.
+        # Canonical database-first conversation engine.
         # ----------------------------------------------------
 
         result = process_message(
@@ -2179,6 +2130,7 @@ def chat():
             language_info=language_context.get(
                 "language_info"
             ),
+            patient_id=int(data.get("patient_id", 1) or 1),
         )
 
         result = _attach_language_metadata(
@@ -2223,7 +2175,8 @@ def chat():
 )
 def companion_message():
     """
-    Unified companion conversation endpoint.
+    Unified companion conversation endpoint using the canonical
+    database-first conversation engine.
 
     Language behavior is identical to /api/chat.
     """
@@ -2293,6 +2246,7 @@ def companion_message():
             language_info=language_context.get(
                 "language_info"
             ),
+            patient_id=int(data.get("patient_id", 1) or 1),
         )
 
         result = _attach_language_metadata(
@@ -3673,161 +3627,491 @@ def internal_error(error):
     methods=["GET"],
 )
 def voice_test():
-    """Development patient conversation page.
-
-    The button is explicitly type=button and the handler prevents the
-    default browser action.  Messages are sent with fetch() to the same
-    Flask origin, so the page is never submitted/reloaded by the button.
     """
-    languages = list_languages()
-    options = ['<option value="">Auto Detect</option>']
-    for item in languages:
-        code = item.get("code", "") if isinstance(item, dict) else ""
-        name = item.get("name", code) if isinstance(item, dict) else code
-        if code:
-            options.append(f'<option value="{code}">{name}</option>')
-    options_html = "\n".join(options)
+    Temporary browser voice test page.
 
-    return f"""<!DOCTYPE html>
-<html lang="en">
+    The selected language is sent to /api/chat.
+
+    The backend returns the resolved language metadata and
+    the browser uses the returned speech locale.
+
+    This page is for backend testing only; the production UI
+    should use the /api/voice/* endpoints.
+    """
+
+    return """
+<!DOCTYPE html>
+<html>
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>DementiaCareAI Voice Test</title>
-<style>
-body {{ font-family: Arial,sans-serif; max-width:760px; margin:40px auto; padding:20px; }}
-textarea,select {{ width:100%; box-sizing:border-box; font-size:18px; padding:12px; margin-top:10px; }}
-textarea {{ min-height:110px; resize:vertical; }}
-button {{ margin-top:12px; padding:13px 20px; font-size:18px; cursor:pointer; }}
-button:disabled {{ opacity:.6; cursor:not-allowed; }}
-#status,#languageInfo,#response {{ margin-top:15px; padding:12px; border-radius:8px; }}
-#response {{ background:#f3f3f3; min-height:45px; white-space:pre-wrap; }}
-#languageInfo {{ background:#eee; font-size:14px; }}
-.row {{ display:flex; gap:10px; align-items:center; }}
-#mic {{ min-width:150px; }}
-</style>
+    <meta charset="UTF-8">
+
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1.0"
+    >
+
+    <title>DementiaCareAI Voice</title>
+
+    <style>
+
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 760px;
+            margin: 40px auto;
+            padding: 20px;
+        }
+
+        textarea {
+            width: 100%;
+            height: 120px;
+            font-size: 20px;
+            padding: 12px;
+            box-sizing: border-box;
+            margin-top: 10px;
+        }
+
+        select {
+            width: 100%;
+            padding: 12px;
+            font-size: 18px;
+            margin-top: 10px;
+        }
+
+        button {
+            margin-top: 15px;
+            padding: 14px 25px;
+            font-size: 18px;
+            cursor: pointer;
+        }
+
+        button:disabled {
+            cursor: not-allowed;
+            opacity: 0.6;
+        }
+
+        #status {
+            margin-top: 20px;
+            font-weight: bold;
+        }
+
+        #languageInfo {
+            margin-top: 10px;
+            padding: 10px;
+            background: #eeeeee;
+            border-radius: 8px;
+            font-size: 15px;
+        }
+
+        #response {
+            margin-top: 15px;
+            padding: 15px;
+            background: #f3f3f3;
+            border-radius: 8px;
+            font-size: 18px;
+            min-height: 40px;
+        }
+
+    </style>
 </head>
+
 <body>
+
 <h1>🧠 DementiaCareAI</h1>
-<p>Talk naturally with the companion. Type a message or use the microphone.</p>
-<label for="language">Language</label>
-<select id="language">{options_html}</select>
-<textarea id="message" autocomplete="off" placeholder="Type your message here..."></textarea>
-<div class="row">
-<button id="talk" type="button">🔊 Talk to DementiaCareAI</button>
-<button id="mic" type="button">🎤 Voice Input</button>
-</div>
-<div id="status" role="status"></div>
+
+<label for="language">
+    Language
+</label>
+
+<select id="language">
+
+    <option value="">
+        Auto Detect
+    </option>
+
+    <option value="en">
+        English
+    </option>
+
+    <option value="hi">
+        Hindi
+    </option>
+
+    <option value="hinglish">
+        Hinglish
+    </option>
+
+    <option value="as">
+        Assamese
+    </option>
+
+    <option value="bn">
+        Bengali
+    </option>
+
+    <option value="mr">
+        Marathi
+    </option>
+
+    <option value="ur">
+        Urdu
+    </option>
+
+    <option value="pa">
+        Punjabi
+    </option>
+
+    <option value="gu">
+        Gujarati
+    </option>
+
+    <option value="or">
+        Odia
+    </option>
+
+    <option value="ta">
+        Tamil
+    </option>
+
+    <option value="te">
+        Telugu
+    </option>
+
+    <option value="kn">
+        Kannada
+    </option>
+
+    <option value="ml">
+        Malayalam
+    </option>
+
+    <option value="ne">
+        Nepali
+    </option>
+
+    <option value="mni">
+        Manipuri / Meitei
+    </option>
+
+    <option value="brx">
+        Bodo
+    </option>
+
+    <option value="kha">
+        Khasi
+    </option>
+
+    <option value="grt">
+        Garo
+    </option>
+
+    <option value="lus">
+        Mizo
+    </option>
+
+    <option value="trp">
+        Tripuri / Kokborok
+    </option>
+
+</select>
+
+<textarea
+    id="message"
+    placeholder="Type your message here..."
+></textarea>
+
+<button
+    id="talk"
+    type="button"
+>
+    🔊 Talk to DementiaCareAI
+</button>
+
+<div id="status"></div>
+
 <div id="languageInfo"></div>
+
 <div id="response"></div>
+
 <script>
-(() => {{
-  const message = document.getElementById('message');
-  const language = document.getElementById('language');
-  const talk = document.getElementById('talk');
-  const mic = document.getElementById('mic');
-  const status = document.getElementById('status');
-  const languageInfo = document.getElementById('languageInfo');
-  const responseBox = document.getElementById('response');
-  let busy = false;
 
-  const locales = {{
-    en:'en-IN', hi:'hi-IN', hinglish:'hi-IN', as:'as-IN', bn:'bn-IN', mr:'mr-IN',
-    ur:'ur-IN', pa:'pa-IN', gu:'gu-IN', or:'or-IN', ta:'ta-IN', te:'te-IN',
-    kn:'kn-IN', ml:'ml-IN', ne:'ne-IN', mni:'mni-IN', brx:'brx-IN', kha:'kha-IN',
-    grt:'grt-IN', lus:'lus-IN', trp:'trp-IN'
-  }};
+const message =
+    document.getElementById("message");
 
-  function speechLocale(data) {{
-    return (data && data.language_info && data.language_info.speech_locale) ||
-           locales[(data && (data.language || data.detected_language)) || 'en'] || 'en-IN';
-  }}
+const language =
+    document.getElementById("language");
 
-  function speak(text, locale) {{
-    if (!text || !('speechSynthesis' in window)) return Promise.resolve(false);
-    return new Promise(resolve => {{
-      window.speechSynthesis.cancel();
-      const u = new SpeechSynthesisUtterance(text);
-      u.lang = locale;
-      u.rate = 0.88; u.pitch = 1; u.volume = 1;
-      u.onend = () => {{ status.textContent = 'DementiaCareAI finished speaking.'; resolve(true); }};
-      u.onerror = e => {{ status.textContent = 'Text response is ready, but browser speech failed: ' + (e.error || 'unknown error'); resolve(false); }};
-      // Some browsers need speechSynthesis to be called directly from the user gesture.
-      window.speechSynthesis.speak(u);
-      setTimeout(() => {{ if (window.speechSynthesis.paused) window.speechSynthesis.resume(); }}, 100);
-    }});
-  }}
+const button =
+    document.getElementById("talk");
 
-  async function sendMessage(event) {{
-    if (event) event.preventDefault();
-    if (busy) return;
-    const text = message.value.trim();
-    if (!text) {{ status.textContent = 'Please type something first.'; message.focus(); return; }}
+const status =
+    document.getElementById("status");
 
-    busy = true; talk.disabled = true;
-    status.textContent = 'DementiaCareAI is thinking...';
-    // IMPORTANT: do not clear the input. This prevents the user thinking the page reloaded.
-    try {{
-      const body = {{ message: text, session_id: 'voice-demo' }};
-      if (language.value) body.language = language.value;
+const languageInfo =
+    document.getElementById("languageInfo");
 
-      const result = await fetch('/api/chat', {{
-        method:'POST', headers:{{'Content-Type':'application/json'}},
-        body:JSON.stringify(body), credentials:'same-origin', cache:'no-store'
-      }});
-      const raw = await result.text();
-      let data;
-      try {{ data = JSON.parse(raw); }} catch {{ throw new Error('Server returned non-JSON response (' + result.status + ').'); }}
-      if (!result.ok || data.success === false) throw new Error(data.error || data.message || 'Chat failed');
+const responseBox =
+    document.getElementById("response");
 
-      const answer = String(data.response || data.message || '').trim();
-      if (!answer) throw new Error('The AI returned an empty response.');
-      responseBox.textContent = answer;
-      const selected = data.language || 'en';
-      const detected = data.detected_language || selected;
-      const confidence = data.language_confidence;
-      languageInfo.textContent = 'Response language: ' + selected + ' | Detected: ' + detected +
-        (confidence !== undefined ? ' | Confidence: ' + confidence : '');
-      status.textContent = 'DementiaCareAI is speaking...';
-      await speak(answer, speechLocale(data));
-    }} catch (error) {{
-      console.error('DementiaCareAI chat error:', error);
-      status.textContent = 'Error: ' + error.message;
-    }} finally {{
-      busy = false; talk.disabled = false; message.focus();
-    }}
-  }}
 
-  // The button is type=button, but preventDefault is kept as a defensive guard.
-  talk.addEventListener('click', sendMessage);
-  message.addEventListener('keydown', e => {{
-    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') sendMessage(e);
-  }});
+function getSpeechLocale(data) {
 
-  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SpeechRecognition) {{
-    mic.disabled = true; mic.title = 'Speech recognition is not supported in this browser.';
-  }} else {{
-    const recognition = new SpeechRecognition();
-    recognition.interimResults = false; recognition.continuous = false;
-    mic.addEventListener('click', () => {{
-      recognition.lang = locales[language.value || 'en'] || 'en-IN';
-      status.textContent = 'Listening...'; mic.disabled = true;
-      try {{ recognition.start(); }} catch (e) {{ mic.disabled = false; status.textContent = 'Microphone could not start.'; }}
-    }});
-    recognition.onresult = e => {{
-      const transcript = e.results[0][0].transcript || '';
-      message.value = transcript;
-      status.textContent = 'Voice captured. Press Talk to DementiaCareAI.';
-      message.focus();
-    }};
-    recognition.onerror = e => {{ status.textContent = 'Voice input error: ' + e.error; }};
-    recognition.onend = () => {{ mic.disabled = false; }};
-  }}
-}})();
+    if (
+        data
+        && data.language_info
+        && data.language_info.speech_locale
+    ) {
+
+        return data.language_info.speech_locale;
+    }
+
+    const languageCode =
+        data.language
+        || data.detected_language
+        || "";
+
+    const locales = {
+
+        "en": "en-IN",
+
+        "hi": "hi-IN",
+
+        "hinglish": "hi-IN",
+
+        "as": "as-IN",
+
+        "bn": "bn-IN",
+
+        "mr": "mr-IN",
+
+        "ur": "ur-IN",
+
+        "pa": "pa-IN",
+
+        "gu": "gu-IN",
+
+        "or": "or-IN",
+
+        "ta": "ta-IN",
+
+        "te": "te-IN",
+
+        "kn": "kn-IN",
+
+        "ml": "ml-IN",
+
+        "ne": "ne-IN",
+
+        "mni": "mni-IN",
+
+        "brx": "brx-IN",
+
+        "kha": "kha-IN",
+
+        "grt": "grt-IN",
+
+        "lus": "lus-IN",
+
+        "trp": "trp-IN"
+
+    };
+
+    return (
+        locales[languageCode]
+        || "en-IN"
+    );
+}
+
+
+button.addEventListener(
+    "click",
+    async function () {
+
+        const text =
+            message.value.trim();
+
+        const selectedLanguage =
+            language.value;
+
+        if (!text) {
+
+            status.textContent =
+                "Please type something first.";
+
+            message.focus();
+
+            return;
+        }
+
+        button.disabled = true;
+
+        status.textContent =
+            "DementiaCareAI is thinking...";
+
+        languageInfo.textContent = "";
+
+        responseBox.textContent = "";
+
+        try {
+
+            const body = {
+                message: text,
+
+                session_id:
+                    "voice-demo"
+            };
+
+            /*
+             * Only send language when the user explicitly
+             * selected one.
+             *
+             * Empty language means automatic local detection.
+             */
+
+            if (selectedLanguage) {
+
+                body.language =
+                    selectedLanguage;
+            }
+
+            const result =
+                await fetch(
+                    "/api/chat",
+                    {
+                        method: "POST",
+
+                        headers: {
+                            "Content-Type":
+                                "application/json"
+                        },
+
+                        body: JSON.stringify(
+                            body
+                        )
+                    }
+                );
+
+            const data =
+                await result.json();
+
+            if (
+                !result.ok
+                || !data.success
+            ) {
+
+                throw new Error(
+                    data.error
+                    || data.message
+                    || "Chat failed"
+                );
+            }
+
+            const answer =
+                data.response
+                || data.message
+                || "";
+
+            responseBox.textContent =
+                answer;
+
+            const selected =
+                data.language
+                || "en";
+
+            const detected =
+                data.detected_language
+                || selected;
+
+            const confidence =
+                data.language_confidence;
+
+            languageInfo.textContent =
+                "Response language: "
+                + selected
+                + " | Detected: "
+                + detected
+                + (
+                    confidence !== undefined
+                    ? " | Confidence: "
+                        + confidence
+                    : ""
+                );
+
+            status.textContent =
+                "DementiaCareAI is speaking...";
+
+            if (
+                "speechSynthesis"
+                in window
+            ) {
+
+                window.speechSynthesis.cancel();
+
+                const speech =
+                    new SpeechSynthesisUtterance(
+                        answer
+                    );
+
+                speech.lang =
+                    getSpeechLocale(
+                        data
+                    );
+
+                speech.rate = 0.88;
+
+                speech.pitch = 1.0;
+
+                speech.volume = 1.0;
+
+                speech.onend =
+                    function () {
+
+                        status.textContent =
+                            "DementiaCareAI finished speaking.";
+
+                    };
+
+                speech.onerror =
+                    function (event) {
+
+                        status.textContent =
+                            "Speech error: "
+                            + event.error;
+
+                    };
+
+                window.speechSynthesis.speak(
+                    speech
+                );
+
+            } else {
+
+                status.textContent =
+                    "Speech synthesis is not supported by this browser.";
+
+            }
+
+        } catch (error) {
+
+            console.error(error);
+
+            status.textContent =
+                "Error: "
+                + error.message;
+
+        } finally {
+
+            button.disabled = false;
+
+        }
+
+    }
+);
+
 </script>
+
 </body>
-</html>"""
+</html>
+"""
 
 
 # ============================================================
@@ -4078,13 +4362,8 @@ if __name__ == "__main__":
 
     print()
 
-    # Hackathon/demo mode: disable Flask's debug auto-reloader.
-    # The reloader can restart the process when project files change
-    # (including OneDrive/Git/VS Code file updates), which can make
-    # the browser appear to refresh unexpectedly.
     app.run(
         host="127.0.0.1",
         port=5000,
-        debug=False,
-        use_reloader=False,
+        debug=True,
     )

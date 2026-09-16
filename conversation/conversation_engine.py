@@ -34,10 +34,6 @@ This module does NOT diagnose medical conditions.
 """
 
 from __future__ import annotations
-from datetime import datetime, timedelta
-from zoneinfo import ZoneInfo
-
-from tools.reminders import create_reminder
 
 import json
 import logging
@@ -50,7 +46,6 @@ from typing import Any
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
-from ai.gemini_service import get_client as _canonical_gemini_client, model_name as _canonical_model_name, status as _canonical_gemini_status
 
 # DementiaCareAI application context providers.
 # These imports are deliberately kept here and language.py is imported
@@ -63,6 +58,14 @@ from patient.context import get_patient_context
 from memory.memory_store import get_memories
 from companion.daily_plan import get_companion_recommendation
 from companion.state import get_state
+
+try:
+    from patient_data.knowledge import get_patient, search_patient_facts
+    TEAM_KNOWLEDGE_AVAILABLE = True
+except Exception:
+    get_patient = None
+    search_patient_facts = None
+    TEAM_KNOWLEDGE_AVAILABLE = False
 
 
 # ==========================================================
@@ -78,7 +81,7 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 # Keep the known-working model for this project.
 GEMINI_MODEL = os.getenv(
     "GEMINI_MODEL",
-    _canonical_model_name(),
+    "gemini-3.6-flash",
 )
 
 
@@ -94,7 +97,22 @@ def get_gemini_client():
     Lazily create and return the Gemini client.
     """
 
-    return _canonical_gemini_client()
+    global _client
+
+    if _client is not None:
+        return _client
+
+    if not GEMINI_API_KEY:
+        raise RuntimeError(
+            "GEMINI_API_KEY is not configured. "
+            "Add GEMINI_API_KEY to the project's .env file."
+        )
+
+    _client = genai.Client(
+        api_key=GEMINI_API_KEY
+    )
+
+    return _client
 
 
 # ==========================================================
@@ -359,562 +377,6 @@ Never sacrifice factual accuracy for conversational fluency.
 If something is unknown, do not invent it.
 """
 
-# ==========================================================
-# APPLICATION ACTIONS
-# ==========================================================
-
-def _parse_reminder_request(
-    message: str,
-) -> dict[str, Any] | None:
-    """
-    Detect an explicit patient reminder request locally.
-
-    Gemini is deliberately NOT used to decide whether an
-    application-state-changing reminder should be created.
-
-    Returns:
-        None
-            Message is not a reminder request.
-
-        {
-            "needs_time": True
-        }
-            Reminder was requested but no usable time was found.
-
-        {
-            "needs_message": True,
-            "reminder_time": "YYYY-MM-DD HH:MM"
-        }
-            Time exists but reminder content is missing.
-
-        {
-            "message": "...",
-            "reminder_time": "YYYY-MM-DD HH:MM",
-            "needs_time": False,
-            "needs_message": False
-        }
-            Complete reminder action.
-    """
-
-    raw = _clean_text(message) or ""
-
-    normalized = " ".join(
-        raw.lower().split()
-    )
-
-    if not normalized:
-        return None
-
-    trigger = re.search(
-        r"\b(?:"
-        r"remind me"
-        r"|set (?:a )?reminder"
-        r"|create (?:a )?reminder"
-        r"|reminder me"
-        r")\b",
-        normalized,
-    )
-
-    if not trigger:
-        return None
-
-    # ------------------------------------------------------
-    # Time
-    # ------------------------------------------------------
-
-    time_match = re.search(
-        r"\b(?:at|for)\s+"
-        r"(\d{1,2})"
-        r"(?::(\d{2}))?"
-        r"\s*(am|pm)?\b",
-        normalized,
-    )
-
-    if not time_match:
-
-        time_match = re.search(
-            r"\b"
-            r"(\d{1,2})"
-            r":"
-            r"(\d{2})"
-            r"\s*(am|pm)?"
-            r"\b",
-            normalized,
-        )
-
-    if not time_match:
-        return {
-            "needs_time": True,
-        }
-
-    hour = int(
-        time_match.group(1)
-    )
-
-    minute = int(
-        time_match.group(2) or "0"
-    )
-
-    meridiem = time_match.group(3)
-
-    if minute > 59:
-        return {
-            "needs_time": True,
-        }
-
-    if meridiem:
-
-        if hour < 1 or hour > 12:
-            return {
-                "needs_time": True,
-            }
-
-        if meridiem == "am":
-
-            hour = (
-                0
-                if hour == 12
-                else hour
-            )
-
-        else:
-
-            hour = (
-                12
-                if hour == 12
-                else hour + 12
-            )
-
-    elif hour > 23:
-
-        return {
-            "needs_time": True,
-        }
-
-    # ------------------------------------------------------
-    # Date
-    # ------------------------------------------------------
-
-    now = datetime.now(
-        ZoneInfo("Asia/Kolkata")
-    )
-
-    if re.search(
-        r"\btomorrow\b",
-        normalized,
-    ):
-
-        target_date = (
-            now + timedelta(days=1)
-        ).date()
-
-    else:
-
-        target_date = now.date()
-
-        # No explicit date:
-        # if today's time has passed, use tomorrow.
-        if not re.search(
-            r"\btoday\b",
-            normalized,
-        ):
-
-            candidate = now.replace(
-                hour=hour,
-                minute=minute,
-                second=0,
-                microsecond=0,
-            )
-
-            if candidate <= now:
-
-                target_date = (
-                    now + timedelta(days=1)
-                ).date()
-
-    reminder_time = (
-        f"{target_date:%Y-%m-%d} "
-        f"{hour:02d}:{minute:02d}"
-    )
-
-    # ------------------------------------------------------
-    # Reminder message
-    # ------------------------------------------------------
-
-    tail = normalized[
-        time_match.end():
-    ].strip(
-        " ,.-"
-    )
-
-    tail = re.sub(
-        r"^(?:for|to|about)\s+",
-        "",
-        tail,
-    ).strip()
-
-    before = normalized[
-        trigger.end():
-        time_match.start()
-    ].strip(
-        " ,.-"
-    )
-
-    before = re.sub(
-        r"^(?:for|to|about)\s+",
-        "",
-        before,
-    ).strip()
-
-    if (
-        before
-        and before not in {
-            "today",
-            "tomorrow",
-        }
-    ):
-
-        reminder_message = before
-
-        if tail:
-
-            reminder_message = (
-                f"{reminder_message} "
-                f"{tail}"
-            ).strip()
-
-    else:
-
-        reminder_message = tail
-
-    reminder_message = re.sub(
-        r"\b(?:today|tomorrow)\b",
-        "",
-        reminder_message,
-    ).strip(
-        " ,.-"
-    )
-
-    if not reminder_message:
-
-        return {
-            "needs_time": False,
-            "needs_message": True,
-            "reminder_time": reminder_time,
-        }
-
-    return {
-        "needs_time": False,
-        "needs_message": False,
-        "message": reminder_message,
-        "reminder_time": reminder_time,
-    }
-
-
-def _execute_reminder_action(
-    action: dict[str, Any],
-) -> dict[str, Any]:
-    """
-    Execute a validated reminder action.
-
-    A reminder is considered created only when the underlying
-    reminder service returns a successful result.
-    """
-
-    if action.get("needs_time"):
-
-        return {
-            **action,
-            "success": True,
-            "created": False,
-        }
-
-    if action.get("needs_message"):
-
-        return {
-            **action,
-            "success": True,
-            "created": False,
-        }
-
-    result = create_reminder(
-        message=action["message"],
-        reminder_time=action["reminder_time"],
-    )
-
-    if isinstance(
-        result,
-        dict,
-    ):
-
-        if result.get(
-            "success"
-        ) is False:
-
-            raise RuntimeError(
-                str(
-                    result.get(
-                        "error"
-                    )
-                    or
-                    "Reminder could not be created."
-                )
-            )
-
-        return {
-            **action,
-            "success": True,
-            "created": True,
-            "reminder": result,
-        }
-
-    if result is None or result is False:
-
-        raise RuntimeError(
-            "Reminder could not be created."
-        )
-
-    return {
-        **action,
-        "success": True,
-        "created": True,
-        "reminder": result,
-    }
-
-
-def _reminder_response(
-    language: str,
-    action: dict[str, Any],
-) -> str:
-    """
-    Produce a short patient-friendly reminder response.
-
-    The actual reminder must already have been confirmed by
-    create_reminder() before this function is used as a
-    confirmation.
-    """
-
-    code = str(
-        language or "en"
-    ).lower()
-
-    if action.get(
-        "needs_time"
-    ):
-
-        responses = {
-
-            "en":
-                "Of course. What time would you like me to remind you?",
-
-            "hi":
-                "ज़रूर। आप किस समय याद दिलाना चाहते हैं?",
-
-            "hinglish":
-                "Bilkul. Aap kis time reminder chahte hain?",
-
-            "bn":
-                "অবশ্যই। আপনি কোন সময় মনে করিয়ে দিতে চান?",
-
-            "as":
-                "অৱশ্যেই। আপুনি কিমান বজাত সোঁৱৰাই দিবলৈ বিচাৰে?",
-
-            "mr":
-                "नक्की. तुम्हाला कोणत्या वेळी आठवण करून द्यायची आहे?",
-
-            "ur":
-                "ضرور۔ آپ کس وقت یاد دہانی چاہتے ہیں؟",
-
-            "pa":
-                "ਜ਼ਰੂਰ। ਤੁਸੀਂ ਕਿਸ ਵੇਲੇ ਯਾਦ ਦਿਵਾਉਣਾ ਚਾਹੁੰਦੇ ਹੋ?",
-
-            "gu":
-                "ચોક્કસ. તમને કયા સમયે યાદ અપાવવું છે?",
-
-            "or":
-                "ନିଶ୍ଚୟ। ଆପଣ କେଉଁ ସମୟରେ ମନେ ପକାଇବାକୁ ଚାହୁଁଛନ୍ତି?",
-
-            "ta":
-                "நிச்சயமாக. எந்த நேரத்தில் நினைவூட்ட வேண்டும்?",
-
-            "te":
-                "తప్పకుండా. ఏ సమయంలో గుర్తు చేయాలి?",
-
-            "kn":
-                "ಖಂಡಿತ. ಯಾವ ಸಮಯಕ್ಕೆ ನೆನಪಿಸಬೇಕು?",
-
-            "ml":
-                "തീർച്ചയായും. ഏത് സമയത്ത് ഓർമ്മിപ്പിക്കണം?",
-
-            "ne":
-                "अवश्य। तपाईंलाई कुन समयमा सम्झाउन चाहनुहुन्छ?",
-
-            "mni":
-                "অবশ্যই। নঙনা করম সময়দা reminder পাম্বিরো?",
-
-            "brx":
-                "निश्चय। नोंथां सोराव बेसेबां समाव सावरायनाय लुबैयो?",
-
-            "kha":
-                "Hooid. Phi kwah ka jingkynmaw ha kano ka por?",
-
-            "grt":
-                "Bebak. Naia somo an·tangna nangni gisik ka?",
-
-            "lus":
-                "A nih e. Engtikah nge reminder i duh?",
-
-            "trp":
-                "অবশ্যই। নং কোন সময়ত মনে করাই দিবো?",
-        }
-
-        return responses.get(
-            code,
-            responses["en"],
-        )
-
-    if action.get(
-        "needs_message"
-    ):
-
-        responses = {
-
-            "en":
-                "Sure. What would you like me to remind you about?",
-
-            "hi":
-                "ज़रूर। आपको किस बात की याद दिलानी है?",
-
-            "hinglish":
-                "Bilkul. Kis baat ka reminder chahiye?",
-
-            "bn":
-                "অবশ্যই। কী মনে করিয়ে দিতে হবে?",
-
-            "as":
-                "অৱশ্যেই। কিহৰ কথা সোঁৱৰাই দিব লাগে?",
-
-            "mr":
-                "नक्की. तुम्हाला कशाची आठवण करून द्यायची आहे?",
-
-            "ur":
-                "ضرور۔ کس بات کی یاد دہانی چاہیے؟",
-
-            "pa":
-                "ਜ਼ਰੂਰ। ਕਿਸ ਗੱਲ ਦੀ ਯਾਦ ਦਿਵਾਉਣੀ ਹੈ?",
-
-            "gu":
-                "ચોક્કસ. શેની યાદ અપાવવી છે?",
-
-            "or":
-                "ନିଶ୍ଚୟ। କେଉଁ କଥା ମନେ ପକାଇବାକୁ ହେବ?",
-
-            "ta":
-                "நிச்சயமாக. எதை நினைவூட்ட வேண்டும்?",
-
-            "te":
-                "తప్పకుండా. దేనిని గుర్తు చేయాలి?",
-
-            "kn":
-                "ಖಂಡಿತ. ಯಾವುದನ್ನು ನೆನಪಿಸಬೇಕು?",
-
-            "ml":
-                "തീർച്ചയായും. എന്താണ് ഓർമ്മിപ്പിക്കേണ്ടത്?",
-
-            "ne":
-                "अवश्य। के कुराको सम्झना गराउनुपर्छ?",
-
-            "mni":
-                "অবশ্যই। করিগুম্বা নুংনা সেভারায়নায় পাম্বিরো?",
-
-            "brx":
-                "निश्चय। माबोरैखौ सावरायनाय लुबैयो?",
-
-            "kha":
-                "Ho oid. Kaei bynta ai ba ngan kynmaw?",
-
-            "grt":
-                "Bebak. Naia gimin gisik ka?",
-
-            "lus":
-                "A nih e. Eng nge i duh reminder?",
-
-            "trp":
-                "অবশ্যই। কিসের মনে করাই দিবো?",
-        }
-
-        return responses.get(
-            code,
-            responses["en"],
-        )
-
-    reminder_time = str(
-        action.get(
-            "reminder_time",
-            "",
-        )
-    )
-
-    reminder_message = str(
-        action.get(
-            "message",
-            "",
-        )
-    ).strip()
-
-    if code == "hi":
-
-        return (
-            f"ठीक है। मैंने {reminder_time} के लिए "
-            f"याद दिलाने का समय तय कर दिया है: "
-            f"{reminder_message}।"
-        )
-
-    if code == "hinglish":
-
-        return (
-            f"Theek hai. Maine {reminder_time} ke liye "
-            f"reminder set kar diya hai: "
-            f"{reminder_message}."
-        )
-
-    if code == "bn":
-
-        return (
-            f"ঠিক আছে। {reminder_time} সময়ের জন্য "
-            f"রিমাইন্ডার সেট করা হয়েছে: "
-            f"{reminder_message}।"
-        )
-
-    if code == "mr":
-
-        return (
-            f"ठीक आहे. {reminder_time} साठी "
-            f"आठवण करून देण्याचे ठरवले आहे: "
-            f"{reminder_message}."
-        )
-
-    if code == "ur":
-
-        return (
-            f"ٹھیک ہے۔ {reminder_time} کے لیے "
-            f"یاد دہانی مقرر کر دی گئی ہے: "
-            f"{reminder_message}۔"
-        )
-
-    if code == "pa":
-
-        return (
-            f"ਠੀਕ ਹੈ। {reminder_time} ਲਈ "
-            f"ਯਾਦ ਦਿਵਾਉਣ ਦਾ ਸਮਾਂ ਰੱਖ ਦਿੱਤਾ ਹੈ: "
-            f"{reminder_message}।"
-        )
-
-    return (
-        f"Done. I set a reminder for "
-        f"{reminder_time} about "
-        f"{reminder_message}."
-    )
 
 # ==========================================================
 # BASIC SANITIZATION
@@ -1191,6 +653,9 @@ def build_gemini_context(
         "language": language,
         "language_name": language_name,
         "base_language": base_language,
+        "patient_id": None,
+        "team_patient_data": {},
+        "relevant_patient_facts": [],
     }
 
     return context
@@ -1588,7 +1053,7 @@ def _generate_gemini_content_with_retry(
                 config=types.GenerateContentConfig(
                     system_instruction=SYSTEM_INSTRUCTION,
                     temperature=0.35,
-                    max_output_tokens=768,
+                    max_output_tokens=2048,
                 ),
             )
 
@@ -1817,6 +1282,7 @@ Requested language: {language_name} ({language})
 Base language: {base_language}
 
 Respond naturally to the person's current message.
+Respond only in the requested language; use English only when English is requested.
 
 Important rules:
 
@@ -2106,10 +1572,176 @@ def _memory_matches_message(
     return bool(message_words & memory_words)
 
 
+def _load_team_patient_knowledge(message: str, patient_id: int = 1) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Load trusted read-only facts from the team database without breaking chat."""
+    if not TEAM_KNOWLEDGE_AVAILABLE or get_patient is None or search_patient_facts is None:
+        return {}, []
+    try:
+        patient = get_patient(patient_id) or {}
+    except Exception:
+        logger.warning("Unable to load team patient data.", exc_info=True)
+        patient = {}
+    try:
+        facts = search_patient_facts(message, patient_id=patient_id) or []
+    except Exception:
+        logger.warning("Unable to search team patient data.", exc_info=True)
+        facts = []
+    return (
+        patient if isinstance(patient, dict) else {},
+        facts if isinstance(facts, list) else [],
+    )
+
+
+def _answer_from_team_patient_data(
+    message: str,
+    patient_data: dict[str, Any],
+    facts: list[dict[str, Any]],
+    language: str = "en",
+) -> str | None:
+    """Answer high-confidence personal questions directly from trusted team DB facts."""
+    text = " ".join((message or "").strip().lower().split())
+
+    def has_any(*terms: str) -> bool:
+        return any(term.lower() in text for term in terms)
+
+    preferred_name = patient_data.get("preferred_name") or ""
+    full_name = patient_data.get("full_name") or preferred_name
+    if has_any("what is my name", "what is my full name", "what's my name", "who am i", "my name", "my full name", "मेरा नाम", "मेरा पूरा नाम", "আমার নাম", "আমার পুরো নাম", "ਮੇਰਾ ਨਾਮ", "ਮੇਰਾ ਪੂਰਾ ਨਾਮ", "என் பெயர்", "என் முழு பெயர்"):
+        if not full_name:
+            return None
+        if language == "hi":
+            if preferred_name and preferred_name != full_name:
+                return f"आपका नाम {full_name} है। परिवार आपको {preferred_name} कहता है।"
+            return f"आपका नाम {full_name} है।"
+        if language == "bn":
+            return f"আপনার নাম {full_name}।"
+        if language == "pa":
+            return f"ਤੁਹਾਡਾ ਨਾਮ {full_name} ਹੈ।"
+        if language == "ta":
+            return f"உங்கள் பெயர் {full_name}."
+        return f"Your name is {full_name}."
+
+    if has_any("what does my family call me", "what does family call me", "my nickname", "family nickname", "मुझे क्या कहते हैं", "परिवार मुझे", "আমাকে কী বলে", "ਪਰਿਵਾਰ ਮੈਨੂੰ", "என்னை என்ன அழைப்பார்கள்"):
+        if not preferred_name:
+            return None
+        if language == "hi": return f"आपका परिवार आपको {preferred_name} कहता है।"
+        if language == "bn": return f"আপনার পরিবার আপনাকে {preferred_name} বলে।"
+        if language == "pa": return f"ਤੁਹਾਡਾ ਪਰਿਵਾਰ ਤੁਹਾਨੂੰ {preferred_name} ਕਹਿੰਦਾ ਹੈ।"
+        if language == "ta": return f"உங்கள் குடும்பம் உங்களை {preferred_name} என்று அழைக்கிறது."
+        return f"Your family calls you {preferred_name}."
+
+    family = [
+        item.get("data", {})
+        if isinstance(item, dict) and item.get("type") == "family_member"
+        else item
+        for item in facts
+    ] if isinstance(facts, list) else []
+
+    def find_relation(relation: str):
+        wanted = relation.casefold()
+        for item in family:
+            if isinstance(item, dict) and str(item.get("relation", "")).casefold() == wanted:
+                return item
+        return None
+
+    for relation, phrases, labels in [
+        ("Daughter", ("my daughter", "who is my daughter", "daughter", "मेरी बेटी", "बेटी", "আমার মেয়ে", "মেয়ে", "ਮੇਰੀ ਧੀ", "ਧੀ", "என் மகள்", "மகள்"), ("बेटी", "মেয়ে", "ਧੀ", "மகள்")),
+        ("Grandson", ("my grandson", "who is my grandson", "grandson", "मेरा पोता", "पोता", "আমার নাতি", "নাতি", "ਮੇਰਾ ਪੋਤਾ", "ਪੋਤਾ", "என் பேரன்", "பேரன்"), ("पोता", "নাতি", "ਪੋਤਾ", "பேரன்")),
+        ("Son", ("my son", "who is my son", "son", "मेरा बेटा", "बेटा", "আমার ছেলে", "ছেলে", "ਮੇਰਾ ਪੁੱਤਰ", "ਪੁੱਤਰ", "என் மகன்", "மகன்"), ("बेटा", "ছেলে", "ਪੁੱਤਰ", "மகன்")),
+        ("Sister", ("my sister", "who is my sister", "sister", "मेरी बहन", "बहन", "আমার বোন", "বোন", "ਮੇਰੀ ਭੈਣ", "ਭੈਣ", "என் சகோதரி", "சகோதரி"), ("बहन", "বোন", "ਭੈਣ", "சகோதரி")),
+    ]:
+        if has_any(*phrases):
+            person = find_relation(relation)
+            if not person:
+                return None
+            name = person.get("name")
+            if not name:
+                return None
+            if relation == "Daughter":
+                if language == "hi": return f"आपकी बेटी का नाम {name} है।"
+                if language == "bn": return f"আপনার মেয়ের নাম {name}।"
+                if language == "pa": return f"ਤੁਹਾਡੀ ਧੀ ਦਾ ਨਾਮ {name} ਹੈ।"
+                if language == "ta": return f"உங்கள் மகளின் பெயர் {name}."
+                return f"Your daughter's name is {name}."
+            if relation == "Son":
+                if language == "hi": return f"आपके बेटे का नाम {name} है।"
+                if language == "bn": return f"আপনার ছেলের নাম {name}।"
+                if language == "pa": return f"ਤੁਹਾਡੇ ਪੁੱਤਰ ਦਾ ਨਾਮ {name} ਹੈ।"
+                if language == "ta": return f"உங்கள் மகனின் பெயர் {name}."
+                return f"Your son's name is {name}."
+            if relation == "Grandson":
+                if language == "hi": return f"आपके पोते का नाम {name} है।"
+                if language == "bn": return f"আপনার নাতির নাম {name}।"
+                if language == "pa": return f"ਤੁਹਾਡੇ ਪੋਤੇ ਦਾ ਨਾਮ {name} ਹੈ।"
+                if language == "ta": return f"உங்கள் பேரனின் பெயர் {name}."
+                return f"Your grandson's name is {name}."
+            if language == "hi": return f"आपकी बहन का नाम {name} है।"
+            if language == "bn": return f"আপনার বোনের নাম {name}।"
+            if language == "pa": return f"ਤੁਹਾਡੀ ਭੈਣ ਦਾ ਨਾਮ {name} ਹੈ।"
+            if language == "ta": return f"உங்கள் சகோதரியின் பெயர் {name}."
+            return f"Your sister's name is {name}."
+
+    if has_any("my medicine", "my medication", "what medicine", "which medicine", "medicine do i take", "medication do i take", "दवाई", "दवा", "मेरी दवाई", "আমার ওষুধ", "ওষুধ", "ਮੇਰੀ ਦਵਾਈ", "ਦਵਾਈ", "என் மருந்து", "மருந்து"):
+        medications = patient_data.get("medications")
+        medication = medications[0] if isinstance(medications, list) and medications else None
+        if medication is None:
+            medication = next((x for x in family if isinstance(x, dict) and (x.get("medicine_name") or x.get("medication_name"))), None)
+        if not medication:
+            return None
+        name = medication.get("medicine_name") or medication.get("medication_name")
+        dosage = medication.get("dosage") or ""
+        instructions = medication.get("instructions") or ""
+        if not name:
+            return None
+        if language == "hi":
+            answer = f"आपकी दवाई {name}"
+            if dosage: answer += f", {dosage}"
+            if instructions: answer += f"। निर्देश: {instructions}."
+            else: answer += "।"
+            return answer
+        if language == "bn":
+            answer = f"আপনার ওষুধ {name}"
+            if dosage: answer += f", {dosage}"
+            if instructions: answer += f"। নির্দেশনা: {instructions}."
+            else: answer += "।"
+            return answer
+        if language == "pa":
+            answer = f"ਤੁਹਾਡੀ ਦਵਾਈ {name}"
+            if dosage: answer += f", {dosage}"
+            if instructions: answer += f"। ਹਦਾਇਤ: {instructions}."
+            else: answer += "।"
+            return answer
+        if language == "ta":
+            answer = f"உங்கள் மருந்து {name}"
+            if dosage: answer += f", {dosage}"
+            if instructions: answer += f". வழிமுறை: {instructions}."
+            else: answer += "."
+            return answer
+        answer = f"Your medicine is {name}"
+        if dosage: answer += f", {dosage}"
+        if instructions: answer += f". Instructions: {instructions}."
+        else: answer += "."
+        return answer
+
+    if has_any("graduation", "graduate", "iit roorkee", "roorkee", "ग्रेजुएशन", "स्नातक", "আইআইটি রুরকি", "গ্র্যাজুয়েশন", "ਆਈਆਈਟੀ ਰੁੜਕੀ", "ਗ੍ਰੈਜੂਏਸ਼ਨ", "ஐஐடி ரூர்க்கி", "பட்டமளிப்பு"):
+        memory = next((x for x in family if isinstance(x, dict) and ("iit roorkee" in str(x.get("title", "")).lower() or "roorkee" in str(x.get("location", "")).lower())), None)
+        if not memory:
+            return None
+        title = memory.get("title") or "IIT Roorkee graduation"
+        year = memory.get("year")
+        if language == "hi": return f"आपकी यादों में {title}" + (f", {year} में" if year else "") + " दर्ज है।"
+        if language == "bn": return f"আপনার স্মৃতিতে {title}" + (f", {year} সালে" if year else "") + " আছে।"
+        if language == "pa": return f"ਤੁਹਾਡੀਆਂ ਯਾਦਾਂ ਵਿੱਚ {title}" + (f", {year} ਵਿੱਚ" if year else "") + " ਦਰਜ ਹੈ।"
+        if language == "ta": return f"உங்கள் நினைவுகளில் {title}" + (f", {year} ஆம் ஆண்டு" if year else "") + " பதிவு செய்யப்பட்டுள்ளது."
+        return f"Your memories include {title}" + (f" in {year}" if year else "") + "."
+
+    return None
+
+
 def _build_runtime_context(
     message: str,
     language_info: dict[str, Any],
-    session_id: str | None = None,
+    patient_id: int = 1,
 ) -> dict[str, Any]:
     """
     Gather trusted application context for one companion turn.
@@ -2130,7 +1762,7 @@ def _build_runtime_context(
         patient_profile = {}
 
     try:
-        history = get_conversation_history(limit=10, session_id=session_id)
+        history = get_conversation_history(limit=10)
     except Exception:
         logger.warning(
             "Unable to load conversation history.",
@@ -2200,6 +1832,13 @@ def _build_runtime_context(
     # function can decide what is appropriate to expose.
     context["companion_state"] = companion_state
     context["companion_recommendation"] = recommendation
+    context["patient_id"] = patient_id
+
+    team_patient_data, relevant_patient_facts = _load_team_patient_knowledge(
+        message, patient_id=patient_id
+    )
+    context["team_patient_data"] = team_patient_data
+    context["relevant_patient_facts"] = relevant_patient_facts
 
     return context
 
@@ -2209,6 +1848,7 @@ def process_message(
     session_id: str | None = None,
     language: str | dict[str, Any] | None = None,
     language_info: dict[str, Any] | None = None,
+    patient_id: int = 1,
 ) -> dict[str, Any]:
     """
     Unified companion conversation entry point.
@@ -2230,7 +1870,10 @@ def process_message(
     - persist the user and assistant messages exactly once
     - return a stable API dictionary
 
-    Conversation history is isolated by the supplied session identifier.
+    session_id is accepted for API compatibility. The current database
+    conversation store exposes a single active conversation history and
+    does not accept a session_id argument, so it is not passed into the
+    database layer.
     """
     cleaned_message = _clean_text(message)
 
@@ -2249,7 +1892,25 @@ def process_message(
     context = _build_runtime_context(
         message=cleaned_message,
         language_info=resolved_language_info,
-        session_id=session_id,
+        patient_id=patient_id,
+    )
+
+    # Preserve the selected language as the authoritative generation context.
+    context["language"] = resolved_language_info.get("code", "en")
+    context["language_name"] = resolved_language_info.get(
+        "name", resolved_language_info.get("native_name", "English")
+    )
+    context["base_language"] = resolved_language_info.get(
+        "base_language", context["language"]
+    )
+
+    # High-confidence personal facts are answered directly from the trusted
+    # team database. Gemini is used only when no deterministic answer exists.
+    database_answer = _answer_from_team_patient_data(
+        message=cleaned_message,
+        patient_data=context.get("team_patient_data", {}),
+        facts=context.get("relevant_patient_facts", []),
+        language=context.get("language", "en"),
     )
 
     # Persist the patient message once, before generation.
@@ -2257,7 +1918,6 @@ def process_message(
         save_conversation_message(
             role="user",
             message=cleaned_message,
-            session_id=session_id,
         )
     except Exception:
         logger.warning(
@@ -2265,156 +1925,15 @@ def process_message(
             exc_info=True,
         )
 
-    # Preserve the selected language as the authoritative generation context.
-    context["language"] = resolved_language_info.get("code", "en")
-    context["language_name"] = resolved_language_info.get(
-        "name",
-        resolved_language_info.get("native_name", "English"),
-    )
-    context["base_language"] = resolved_language_info.get(
-        "base_language",
-        context["language"],
-    )
-
-    response_text = generate_gemini_response(
-        message=cleaned_message,
-        context=context,
-    )
-
-        # ======================================================
-    # EXPLICIT APPLICATION ACTIONS
-    # ======================================================
-
-    reminder_action = _parse_reminder_request(
-        cleaned_message
-    )
-
-    if reminder_action is not None:
-
-        try:
-
-            reminder_result = (
-                _execute_reminder_action(
-                    reminder_action
-                )
-            )
-
-            response_text = (
-                _reminder_response(
-                    context.get(
-                        "language",
-                        "en",
-                    ),
-                    reminder_result,
-                )
-            )
-
-            response_text = (
-                clean_generated_response(
-                    response_text
-                )
-            )
-
-        except Exception as error:
-
-            logger.warning(
-                "Reminder action failed.",
-                exc_info=True,
-            )
-
-            response_text = (
-                "I could not create that reminder. "
-                "Please try again."
-            )
-
-            reminder_result = {
-                "success": False,
-                "created": False,
-                "error": str(error),
-            }
-
-        try:
-
-            save_conversation_message(
-                role="assistant",
-                message=response_text,
-                session_id=session_id,
-            )
-
-        except Exception:
-
-            logger.warning(
-                "Unable to persist reminder response.",
-                exc_info=True,
-            )
-
-        return {
-            "success": True,
-
-            "response": response_text,
-
-            "message": response_text,
-
-            "session_id": session_id,
-
-            "language": resolved_language_info.get(
-                "code",
-                "en",
-            ),
-
-            "language_name": resolved_language_info.get(
-                "name",
-                resolved_language_info.get(
-                    "native_name",
-                    "English",
-                ),
-            ),
-
-            "base_language": resolved_language_info.get(
-                "base_language",
-                resolved_language_info.get(
-                    "code",
-                    "en",
-                ),
-            ),
-
-            "speech_locale": resolved_language_info.get(
-                "speech_locale",
-                "en-IN",
-            ),
-
-            "detected_language": resolved_language_info.get(
-                "code",
-                "en",
-            ),
-
-            "is_hinglish": bool(
-                resolved_language_info.get(
-                    "is_hinglish",
-                    False,
-                )
-            ),
-
-            "local_detection": bool(
-                resolved_language_info.get(
-                    "local_detection",
-                    False,
-                )
-            ),
-
-            "action": (
-                "create_reminder"
-                if reminder_result.get(
-                    "created"
-                )
-                else
-                "clarify_reminder"
-            ),
-
-            "reminder": reminder_result.get(
-                "reminder"
-            ),
-        }
+    if database_answer:
+        response_text = database_answer
+        database_answer_used = True
+    else:
+        response_text = generate_gemini_response(
+            message=cleaned_message,
+            context=context,
+        )
+        database_answer_used = False
 
     response_text = clean_generated_response(
         response_text
@@ -2439,7 +1958,6 @@ def process_message(
         save_conversation_message(
             role="assistant",
             message=response_text,
-            session_id=session_id,
         )
     except Exception:
         logger.warning(
@@ -2481,6 +1999,8 @@ def process_message(
                 False,
             )
         ),
+        "database_answer_used": database_answer_used,
+        "patient_id": patient_id,
     }
 
 
@@ -2488,18 +2008,19 @@ def get_engine_status() -> dict[str, Any]:
     """
     Return conversation-engine health without making a Gemini request.
     """
-    gemini = _canonical_gemini_status()
+    configured = bool(GEMINI_API_KEY)
 
     return {
         "available": True,
         "engine": "conversation_engine",
-        "gemini_configured": gemini["configured"],
-        "gemini": gemini,
+        "gemini_configured": configured,
         "gemini_model": GEMINI_MODEL,
         "local_fallback": True,
         "transient_retry_enabled": True,
         "transient_retries": GEMINI_TRANSIENT_RETRIES,
         "multilingual_context": True,
         "local_language_detection": True,
+        "team_patient_database": TEAM_KNOWLEDGE_AVAILABLE,
+        "team_patient_database_read_only": True,
     }
 

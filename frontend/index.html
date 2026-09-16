@@ -85,6 +85,9 @@
         ================================================== -->
 
       <header class="topbar">
+        <a class="back-control" href="#home" aria-label="Back to home">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14.5 5-7 7 7 7"></path></svg>
+        </a>
         <a class="brand" href="#home" aria-label="DementiaCare home">
           <div class="brand-mark">
             <span></span>
@@ -92,8 +95,8 @@
           </div>
 
           <div class="brand-copy">
-            <strong>DementiaCare</strong>
-            <small>AI Companion</small>
+            <strong>Mitra</strong>
+            <small><span class="header-status-dot"></span>Your companion is here</small>
           </div>
         </a>
 
@@ -130,6 +133,9 @@
               ></path>
             </svg>
           </button>
+          <button class="patient-avatar" type="button" aria-label="Dadaji's profile">
+            <span>DS</span><i></i>
+          </button>
         </div>
       </header>
 
@@ -150,13 +156,13 @@
             </div>
 
             <h1>
-              How can I help
-              <em>you today?</em>
+              Welcome Home,
+              <em>Dadaji</em>
             </h1>
 
             <p>
-              I'm here to talk with you, help with your routine, and spend some
-              time together.
+              घर में आपका स्वागत है<br />
+              I'm Mitra, your calm companion for conversation, memories, and everyday care.
             </p>
 
             <div class="hero-actions">
@@ -172,7 +178,7 @@
                   </svg>
                 </span>
 
-                <span> Talk to me </span>
+                <span> Talk to Mitra </span>
               </button>
 
               <button class="secondary-action" id="listenWelcome" type="button">
@@ -207,7 +213,7 @@
               <div>
                 <span class="section-kicker"> YOUR COMPANION </span>
 
-                <strong> I'm listening </strong>
+                <strong> Mitra is listening </strong>
               </div>
 
               <div class="live-status" id="liveStatus">
@@ -366,13 +372,13 @@
             </div>
 
             <div class="companion-message">
-              <div class="message-mark">D</div>
+              <div class="message-mark">M</div>
 
               <div>
-                <span class="message-label"> DEMENTIACARE </span>
+                <span class="message-label"> MITRA </span>
 
                 <p id="companionMessage">
-                  Good morning. How are you feeling today?
+                  Hello, I'm Mitra. How are you feeling today?
                 </p>
               </div>
             </div>
@@ -616,13 +622,12 @@
 
         <section class="voice-section" id="voiceSection">
           <div class="voice-copy">
-            <span class="section-kicker"> YOUR VOICE IS ENOUGH </span>
+            <span class="section-kicker"> TALK TO MITRA </span>
 
-            <h2>Just tell me what you need.</h2>
+            <h2>Talk to Mitra</h2>
 
             <p>
-              You don't have to remember the right words. Speak naturally and
-              I'll do my best to understand.
+              मित्रा से बात करें<br />You can speak naturally. Mitra will listen and help.
             </p>
           </div>
 
@@ -671,9 +676,9 @@
         <section class="chat-section">
           <div class="chat-heading">
             <div>
-              <span class="section-kicker"> OPTIONAL </span>
+            <span class="section-kicker"> TALK WITH MITRA </span>
 
-              <h2>Prefer typing?</h2>
+              <h2>What would you like to talk about?</h2>
             </div>
 
             <span class="chat-note"> Your conversation stays here. </span>
@@ -681,12 +686,12 @@
 
           <div class="conversation" id="conversationArea">
             <div class="chat-message ai-message">
-              <div class="chat-avatar">D</div>
+              <div class="chat-avatar">M</div>
 
               <div class="chat-bubble">
-                <span> DementiaCare </span>
+                <span> Mitra </span>
 
-                <p>You can also type here if you prefer.</p>
+                <p>Hello, I'm Mitra. How are you feeling today?</p>
               </div>
             </div>
           </div>
@@ -695,7 +700,7 @@
             <textarea
               id="messageInput"
               rows="1"
-              placeholder="Write a message..."
+              placeholder="Ask Mitra anything..."
               aria-label="Write a message"
             ></textarea>
 
@@ -715,7 +720,7 @@
 
       <footer class="footer">
         <div>
-          <strong>DementiaCare</strong>
+          <strong>Mitra</strong>
           <span>Designed for calm, simple everyday care.</span>
         </div>
 

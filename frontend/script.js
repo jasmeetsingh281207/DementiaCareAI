@@ -52,7 +52,9 @@ document.addEventListener("DOMContentLoaded", () => {
        STATE
     ===================================================== */
 
-  let selectedLanguage = "en";
+  // null means no patient language has been explicitly selected.  The server
+  // can then use its existing local language detection.
+  let selectedLanguage = null;
 
   const languageLocales = {
     en: "en-IN",
@@ -583,7 +585,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
       option.classList.add("active");
 
-      selectedLanguage = option.dataset.code;
+      // Use the canonical API code from the selected language pill (hi, bn,
+      // pa, ta, etc.), never its human-readable label.
+      selectedLanguage = option.dataset.code || null;
 
       speechLanguage = languageLocales[selectedLanguage] || "en-IN";
 
@@ -603,7 +607,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function updateCompanionLanguage() {
     const messages = {
-      en: "Good morning. How are you feeling today?",
+      en: "Hello, I'm Mitra. How are you feeling today?",
 
       hi: "नमस्ते। आज आप कैसा महसूस कर रहे हैं?",
 
@@ -970,7 +974,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
         body: JSON.stringify({
           message: message,
-          language: selectedLanguage,
+          // An explicit UI choice is authoritative; omitting language keeps
+          // the backend's existing local-detection behaviour intact.
+          ...(selectedLanguage ? { language: selectedLanguage } : {}),
           session_id: sessionId,
         }),
       });
@@ -1034,12 +1040,12 @@ document.addEventListener("DOMContentLoaded", () => {
     if (sender === "ai") {
       wrapper.innerHTML = `
         <div class="chat-avatar">
-          D
+          M
         </div>
 
         <div class="chat-bubble">
           <span>
-            DEMENTIACARE
+            MITRA
           </span>
 
           <p></p>
@@ -1087,16 +1093,16 @@ document.addEventListener("DOMContentLoaded", () => {
 
     typing.innerHTML = `
       <div class="chat-avatar">
-        D
+        M
       </div>
 
       <div class="chat-bubble">
         <span>
-          DEMENTIACARE
+          MITRA
         </span>
 
         <p>
-          Thinking...
+          Mitra is thinking...
         </p>
       </div>
     `;

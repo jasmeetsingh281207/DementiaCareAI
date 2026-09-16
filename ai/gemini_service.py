@@ -23,7 +23,7 @@ _client: Any = None
 _attempted = False
 
 def model_name() -> str:
-    return os.getenv("GEMINI_MODEL") or os.getenv("MODEL_NAME") or "gemini-2.0-flash"
+    return os.getenv("GEMINI_MODEL") or os.getenv("MODEL_NAME") or "gemini-3.6-flash"
 
 def get_client() -> Any | None:
     global _client, _attempted
